@@ -36,6 +36,7 @@ export default function Home() {
   const [isWarmWhite, setIsWarmWhite] = useState(false);
   const [isConnected, setIsConnected] = useState(false);
   const wsRef = useRef<WebSocket | null>(null);
+  const statusUpdateTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
   // Connect to WebSocket
   useEffect(() => {
@@ -107,15 +108,77 @@ export default function Home() {
     loadData();
   }, []);
 
+  // Periodic status updates every 30 seconds
+  useEffect(() => {
+    const intervalId = setInterval(() => {
+      updateBulbStatus();
+    }, 30000);
+
+    return () => {
+      clearInterval(intervalId);
+      if (statusUpdateTimeoutRef.current) {
+        clearTimeout(statusUpdateTimeoutRef.current);
+      }
+    };
+  }, [selectedTargets, groups, bulbs]);
+
+  // Update status for selected bulbs
+  const updateBulbStatus = async () => {
+    try {
+      if (selectedTargets.length === 0) return;
+
+      // Get unique bulb names from selected targets
+      const bulbNamesToUpdate = new Set<string>();
+      
+      selectedTargets.forEach(target => {
+        if (target in groups) {
+          // If it's a group, add all bulbs in the group
+          groups[target].forEach(bulbName => bulbNamesToUpdate.add(bulbName));
+        } else if (bulbs.some(b => b.name === target)) {
+          // If it's an individual bulb
+          bulbNamesToUpdate.add(target);
+        }
+      });
+
+      // Fetch status for each bulb
+      const statusPromises = Array.from(bulbNamesToUpdate).map(async (bulbName) => {
+        try {
+          const response = await fetch(`${API_BASE}/bulbs/${bulbName}`);
+          if (response.ok) {
+            return await response.json();
+          }
+        } catch (error) {
+          console.error(`Failed to fetch status for ${bulbName}:`, error);
+        }
+        return null;
+      });
+
+      const statuses = await Promise.all(statusPromises);
+      
+      // Update bulbs state with fresh data
+      setBulbs(prevBulbs => {
+        const updatedBulbs = [...prevBulbs];
+        statuses.forEach(status => {
+          if (status) {
+            const index = updatedBulbs.findIndex(b => b.name === status.name);
+            if (index !== -1) {
+              updatedBulbs[index] = status;
+            }
+          }
+        });
+        return updatedBulbs;
+      });
+    } catch (error) {
+      console.error("Status update failed:", error);
+    }
+  };
+
   const sendCommand = async (action: string, params: any = {}) => {
     try {
       if (selectedTargets.length === 0) return;
 
-      const isGroup =
-        selectedTargets.length > 1 ||
-        Object.keys(groups).includes(selectedTargets[0]);
-
-      if (isGroup) {
+      if (selectedTargets.length > 1) {
+        // Multiple bulbs selected - use group command
         await fetch(`${API_BASE}/groups/command`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -126,6 +189,7 @@ export default function Home() {
           }),
         });
       } else {
+        // Single bulb selected - use individual command
         await fetch(`${API_BASE}/bulbs/${selectedTargets[0]}/command`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -135,21 +199,57 @@ export default function Home() {
           }),
         });
       }
+
+      // Schedule status update after command
+      if (statusUpdateTimeoutRef.current) {
+        clearTimeout(statusUpdateTimeoutRef.current);
+      }
+      statusUpdateTimeoutRef.current = setTimeout(updateBulbStatus, 1000);
     } catch (error) {
       console.error("Command failed:", error);
     }
   };
 
   const toggleTarget = (target: string) => {
-    setSelectedTargets((prev) =>
-      prev.includes(target)
+    setSelectedTargets((prev) => {
+      const newTargets = prev.includes(target)
         ? prev.filter((t) => t !== target)
-        : [...prev, target],
-    );
+        : [...prev, target];
+      
+      // Update colorwheel to reflect the state of the newly selected targets
+      if (newTargets.length > 0) {
+        // Find the first online and on bulb in the selection
+        const selectedBulb = bulbs.find(b => 
+          newTargets.includes(b.name) && b.online && b.on
+        );
+        
+        if (selectedBulb) {
+          setCurrentColor(selectedBulb.color_hex);
+          setBrightness(selectedBulb.brightness_percent);
+          setIsWarmWhite(selectedBulb.warm_white > 0);
+        }
+      }
+      
+      return newTargets;
+    });
   };
 
   const selectGroup = (groupName: string) => {
-    setSelectedTargets([groupName]);
+    if (groupName in groups) {
+      // Select all bulbs in the group instead of just the group name
+      const bulbsInGroup = groups[groupName];
+      setSelectedTargets(bulbsInGroup);
+      
+      // Update colorwheel to reflect the state of the first bulb in the group
+      const firstBulb = bulbs.find(b => bulbsInGroup.includes(b.name));
+      if (firstBulb && firstBulb.online && firstBulb.on) {
+        setCurrentColor(firstBulb.color_hex);
+        setBrightness(firstBulb.brightness_percent);
+        setIsWarmWhite(firstBulb.warm_white > 0);
+      }
+    } else {
+      setSelectedTargets([groupName]);
+    }
   };
 
   const handleColorPickerChange = (
@@ -169,7 +269,7 @@ export default function Home() {
   };
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-slate-900 via-purple-900 to-slate-900">
+    <div className="min-h-screen crt-monitor" style={{ background: '#1d2021' }}>
       <Head>
         <title>LED Controller</title>
         <meta name="viewport" content="width=device-width, initial-scale=1" />
@@ -184,31 +284,51 @@ export default function Home() {
               className="w-3 h-3 rounded-full mr-2 transition-colors duration-300"
               style={{ backgroundColor: isConnected ? "#10b981" : "#ef4444" }}
             />
-            <h1 className="text-3xl font-bold text-white">LED Controller</h1>
+            <h1 className="text-3xl font-bold" style={{ color: '#b8bb26' }}>LED Controller</h1>
           </div>
-          <p className="text-white/70">Control your smart lights</p>
+          <p style={{ color: '#ebdbb2' }}>Control your smart lights</p>
         </div>
+
+        {/* Color Control - Appears only when something is selected */}
+        {selectedTargets.length > 0 && (
+          <div className="mb-8 transition-all duration-300 ease-in-out">
+            <WheelColorPicker
+              value={currentColor}
+              brightness={brightness}
+              isWarmWhite={isWarmWhite}
+              onColorChange={handleColorPickerChange}
+              onPowerToggle={() => sendCommand("toggle")}
+            />
+          </div>
+        )}
 
         {/* Quick Groups */}
         <div className="mb-6">
-          <h2 className="text-lg font-semibold text-white mb-3">
+          <h2 className="text-lg font-semibold mb-3" style={{ color: '#8ec07c' }}>
             Quick Groups
           </h2>
-          <div className="grid grid-cols-2 gap-3">
+          <div className="grid grid-cols-3 gap-3">
             {Object.entries(groups).map(([groupName, bulbNames]) => (
               <button
                 key={groupName}
                 onClick={() => selectGroup(groupName)}
-                className={`p-4 rounded-2xl border backdrop-blur-sm transition-all duration-200 ${
-                  selectedTargets.includes(groupName)
-                    ? "bg-blue-500/30 border-blue-400/50 shadow-lg shadow-blue-500/25"
-                    : "bg-white/10 border-white/20 hover:bg-white/15"
-                }`}
+                className="p-3 rounded-2xl border backdrop-blur-sm transition-all duration-200"
+                style={{
+                  backgroundColor: groupName in groups && groups[groupName].every(bulbName => selectedTargets.includes(bulbName))
+                    ? '#3c3836'
+                    : '#32302f',
+                  borderColor: groupName in groups && groups[groupName].every(bulbName => selectedTargets.includes(bulbName))
+                    ? '#d3869b'
+                    : '#504945',
+                  borderWidth: groupName in groups && groups[groupName].every(bulbName => selectedTargets.includes(bulbName))
+                    ? '2px'
+                    : '1px'
+                }}
               >
-                <div className="text-white font-medium text-sm capitalize">
+                <div className="font-medium text-xs capitalize" style={{ color: '#ebdbb2' }}>
                   {groupName}
                 </div>
-                <div className="text-white/60 text-xs mt-1">
+                <div className="text-xs mt-1" style={{ color: '#a89984' }}>
                   {bulbNames.length} bulbs
                 </div>
               </button>
@@ -218,19 +338,26 @@ export default function Home() {
 
         {/* Individual Bulbs */}
         <div className="mb-8">
-          <h2 className="text-lg font-semibold text-white mb-3">
+          <h2 className="text-lg font-semibold mb-3" style={{ color: '#8ec07c' }}>
             Individual Bulbs
           </h2>
-          <div className="space-y-3">
+          <div className="grid grid-cols-2 gap-3">
             {bulbs.map((bulb) => (
               <div
                 key={bulb.name}
                 onClick={() => toggleTarget(bulb.name)}
-                className={`p-4 rounded-2xl border backdrop-blur-sm transition-all duration-200 cursor-pointer ${
-                  selectedTargets.includes(bulb.name)
-                    ? "bg-blue-500/30 border-blue-400/50 shadow-lg shadow-blue-500/25"
-                    : "bg-white/10 border-white/20 hover:bg-white/15"
-                }`}
+                className="p-4 rounded-2xl border backdrop-blur-sm transition-all duration-200 cursor-pointer"
+                style={{
+                  backgroundColor: selectedTargets.includes(bulb.name)
+                    ? '#3c3836'
+                    : '#32302f',
+                  borderColor: selectedTargets.includes(bulb.name)
+                    ? '#d3869b'
+                    : '#504945',
+                  borderWidth: selectedTargets.includes(bulb.name)
+                    ? '2px'
+                    : '1px'
+                }}
               >
                 <div className="flex items-center justify-between">
                   <div className="flex items-center space-x-3">
@@ -259,10 +386,10 @@ export default function Home() {
                       )}
                     </div>
                     <div>
-                      <div className="text-white font-medium capitalize">
+                      <div className="font-medium capitalize text-sm" style={{ color: '#ebdbb2' }}>
                         {bulb.name}
                       </div>
-                      <div className="text-white/60 text-sm">
+                      <div className="text-xs" style={{ color: '#a89984' }}>
                         {!bulb.online
                           ? "Offline"
                           : !bulb.on
@@ -277,47 +404,9 @@ export default function Home() {
           </div>
         </div>
 
-        {/* Controls */}
-        {selectedTargets.length > 0 && (
-          <div className="space-y-6">
-            {/* Power Controls */}
-            <div className="bg-white/10 backdrop-blur-xl border border-white/20 rounded-3xl p-6">
-              <h3 className="text-white font-semibold mb-4">Power</h3>
-              <div className="grid grid-cols-3 gap-3">
-                <button
-                  onClick={() => sendCommand("on")}
-                  className="bg-green-500/30 hover:bg-green-500/40 border border-green-400/50 text-white font-medium py-3 px-4 rounded-xl transition-all duration-200 hover:scale-105"
-                >
-                  On
-                </button>
-                <button
-                  onClick={() => sendCommand("off")}
-                  className="bg-red-500/30 hover:bg-red-500/40 border border-red-400/50 text-white font-medium py-3 px-4 rounded-xl transition-all duration-200 hover:scale-105"
-                >
-                  Off
-                </button>
-                <button
-                  onClick={() => sendCommand("toggle")}
-                  className="bg-blue-500/30 hover:bg-blue-500/40 border border-blue-400/50 text-white font-medium py-3 px-4 rounded-xl transition-all duration-200 hover:scale-105"
-                >
-                  Toggle
-                </button>
-              </div>
-            </div>
-
-            {/* Color Control */}
-            <WheelColorPicker
-              value={currentColor}
-              brightness={brightness}
-              isWarmWhite={isWarmWhite}
-              onColorChange={handleColorPickerChange}
-            />
-          </div>
-        )}
-
         {selectedTargets.length === 0 && (
           <div className="text-center py-8">
-            <div className="text-white/60 text-lg">
+            <div className="text-lg" style={{ color: '#a89984' }}>
               Select bulbs or groups to control
             </div>
           </div>

@@ -5,3 +5,4 @@ node_modules
 bun.lock
 next-env.d.ts
 next.config.js
+CLAUDE.md

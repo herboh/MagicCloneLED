@@ -1,4 +1,5 @@
 // components/WheelColorPicker.tsx
+import { ArrowDown10 } from "lucide-react";
 import React, { useRef, useEffect, useState, useCallback } from "react";
 
 interface WheelColorPickerProps {
@@ -10,6 +11,7 @@ interface WheelColorPickerProps {
     brightness: number,
     isWarmWhite: boolean,
   ) => void;
+  onPowerToggle?: () => void;
   className?: string;
 }
 
@@ -18,6 +20,7 @@ export const WheelColorPicker: React.FC<WheelColorPickerProps> = ({
   brightness,
   isWarmWhite,
   onColorChange,
+  onPowerToggle,
   className = "",
 }) => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -25,19 +28,19 @@ export const WheelColorPicker: React.FC<WheelColorPickerProps> = ({
   const [currentHue, setCurrentHue] = useState(0);
   const [currentSaturation, setCurrentSaturation] = useState(100);
 
-  const wheelSize = 280;
+  const wheelSize = 300;
   const centerX = wheelSize / 2;
   const centerY = wheelSize / 2;
-  const outerRadius = wheelSize / 2 - 10;
-  const innerRadius = outerRadius * 0.6; // Creates the donut shape
+  const outerRadius = wheelSize / 2 - 6; // Reduced from 10 to 15 to bring border in slightly
+  const innerRadius = outerRadius * 0.53; // Creates the donut shape
 
-  // Predefined colors
+  // Predefined colors - display gruvbox colors but send original hex values
   const quickColors = [
-    { name: "Red", hex: "#FF0000" },
-    { name: "Blue", hex: "#0000FF" },
-    { name: "Green", hex: "#00FF00" },
-    { name: "Purple", hex: "#8A2BE2" },
-    { name: "Orange", hex: "#FFA500" },
+    { name: "Red", hex: "#FF0000", displayColor: "#cc241d" },
+    { name: "Blue", hex: "#0000FF", displayColor: "#458588" },
+    { name: "Green", hex: "#00FF00", displayColor: "#98971a" },
+    { name: "Purple", hex: "#8A2BE2", displayColor: "#b16286" },
+    { name: "Orange", hex: "#FFA500", displayColor: "#d65d0e" },
   ];
 
   // Convert hex to HSL
@@ -173,6 +176,23 @@ export const WheelColorPicker: React.FC<WheelColorPickerProps> = ({
 
     ctx.putImageData(imageData, 0, 0);
 
+    // Apply blur after drawing the color wheel
+    ctx.drawImage(canvas, 0, 0);
+    ctx.filter = "none"; // reset filter so it doesn’t affect later drawings
+
+    // Draw border after blur
+    ctx.beginPath();
+    ctx.arc(centerX + 1, centerY + 1, outerRadius + 1.4, 0, 2 * Math.PI);
+    ctx.strokeStyle = "#504945";
+    ctx.lineWidth = 5;
+    ctx.stroke();
+
+    ctx.beginPath();
+    ctx.arc(centerX + 1, centerY + 1, innerRadius + 1.4, 0, 2 * Math.PI);
+    ctx.strokeStyle = "#504945";
+    ctx.lineWidth = 5;
+    ctx.stroke();
+
     // Draw selection indicator if not warm white
     if (!isWarmWhite) {
       const angle = (currentHue * Math.PI) / 180;
@@ -182,7 +202,7 @@ export const WheelColorPicker: React.FC<WheelColorPickerProps> = ({
       const indicatorY = centerY + radius * Math.sin(angle);
 
       ctx.beginPath();
-      ctx.arc(indicatorX, indicatorY, 8, 0, 2 * Math.PI);
+      ctx.arc(indicatorX, indicatorY, 10, 0, 2 * Math.PI);
       ctx.fillStyle = "white";
       ctx.fill();
       ctx.strokeStyle = "#333";
@@ -219,19 +239,41 @@ export const WheelColorPicker: React.FC<WheelColorPickerProps> = ({
     const dy = y - centerY;
     const distance = Math.sqrt(dx * dx + dy * dy);
 
-    // Check if click is within the donut area
+    let finalDistance = distance;
+    let hue: number;
+    let saturation: number;
+
+    // Calculate the angle regardless of distance
+    const angle = Math.atan2(dy, dx);
+    hue = ((angle * 180) / Math.PI + 360) % 360;
+
+    // If within the donut area, use actual distance
     if (distance >= innerRadius && distance <= outerRadius) {
-      const angle = Math.atan2(dy, dx);
-      const hue = ((angle * 180) / Math.PI + 360) % 360;
-      const saturation =
+      saturation =
         ((distance - innerRadius) / (outerRadius - innerRadius)) * 100;
-
-      setCurrentHue(hue);
-      setCurrentSaturation(saturation);
-
-      const newColor = hslToHex(hue, saturation, 50);
-      onColorChange(newColor, brightness, false);
     }
+    // If outside the donut but dragging, clamp to the nearest edge
+    else if (isDragging) {
+      if (distance < innerRadius) {
+        // Too close to center - snap to inner edge
+        finalDistance = innerRadius;
+        saturation = 0;
+      } else {
+        // Too far from center - snap to outer edge
+        finalDistance = outerRadius;
+        saturation = 100;
+      }
+    }
+    // If not dragging and outside donut, don't update
+    else {
+      return;
+    }
+
+    setCurrentHue(hue);
+    setCurrentSaturation(saturation);
+
+    const newColor = hslToHex(hue, saturation, 50);
+    onColorChange(newColor, brightness, false);
   };
 
   const handleWarmWhiteToggle = () => {
@@ -251,8 +293,39 @@ export const WheelColorPicker: React.FC<WheelColorPickerProps> = ({
 
   return (
     <div
-      className={`bg-white/10 backdrop-blur-xl border border-white/20 rounded-3xl p-6 ${className}`}
+      className={`backdrop-blur-xl border rounded-3xl p-6 ${className} relative`}
+      style={{
+        backgroundColor: "#32302f",
+        borderColor: "#504945",
+      }}
     >
+      {/* Power Toggle Button */}
+      {onPowerToggle && (
+        <button
+          onClick={onPowerToggle}
+          className="absolute top-4 right-4 z-10 w-10 h-10 rounded-full border
+             flex items-center justify-center cursor-pointer transition-all duration-200
+             bg-[#3c3836] border-[#504945] text-[#8ec07c]
+             hover:bg-[#fb4934] hover:text-[#ebdbb2]"
+          title="Toggle Power"
+        >
+          <svg
+            xmlns="http://www.w3.org/2000/svg"
+            width="20"
+            height="20"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          >
+            <path d="M18.36 6.64a9 9 0 1 1-12.73 0" />
+            <line x1="12" y1="2" x2="12" y2="12" />
+          </svg>
+        </button>
+      )}
+
       {/* Color Wheel */}
       <div className="relative mb-6 flex justify-center">
         <div className="relative">
@@ -265,17 +338,37 @@ export const WheelColorPicker: React.FC<WheelColorPickerProps> = ({
             onPointerMove={handlePointerMove}
             onPointerUp={handlePointerUp}
             onPointerLeave={handlePointerUp}
-            style={{ touchAction: "none" }}
+            style={{
+              touchAction: "none",
+              imageRendering: "auto",
+            }}
           />
 
+          {/* Inner circle border to clean up the donut hole */}
+          {/* <div */}
+          {/*   className="absolute rounded-full border-2 pointer-events-none" */}
+          {/*   style={{ */}
+          {/*     width: `${innerRadius * 2}px`, */}
+          {/*     height: `${innerRadius * 2}px`, */}
+          {/*     top: "50%", */}
+          {/*     left: "50%", */}
+          {/*     transform: "translate(-50%, -50%)", */}
+          {/*     borderColor: "#504945", */}
+          {/*   }} */}
+          {/* /> */}
+          {/**/}
           {/* Warm White Button in Center */}
           <button
             onClick={handleWarmWhiteToggle}
-            className={`absolute top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2 w-24 h-24 rounded-full border-4 transition-all duration-300 font-semibold text-sm ${
-              isWarmWhite
-                ? "bg-yellow-200 border-yellow-400 text-yellow-800 shadow-lg shadow-yellow-400/50"
-                : "bg-white/20 border-white/40 text-white hover:bg-white/30 backdrop-blur-sm"
-            }`}
+            className="absolute top-1/2 left-1/2 w-24 h-24 rounded-full border-4 font-semibold text-sm"
+            style={{
+              transform: "translate(-50%, -50%)",
+              transition:
+                "background-color 0.3s ease, border-color 0.3s ease, box-shadow 0.3s ease",
+              backgroundColor: isWarmWhite ? "#fabd2f" : "#3c3836",
+              borderColor: isWarmWhite ? "#d79921" : "#504945",
+              color: isWarmWhite ? "#1d2021" : "#ebdbb2",
+            }}
           >
             Warm
             <br />
@@ -292,17 +385,22 @@ export const WheelColorPicker: React.FC<WheelColorPickerProps> = ({
             backgroundColor: isWarmWhite ? "#FFF8DC" : value,
           }}
         />
-        <div className="ml-3 text-white">
+        <div className="ml-3" style={{ color: "#ebdbb2" }}>
           <div className="font-mono text-sm">
             {isWarmWhite ? "Warm White" : value}
           </div>
-          <div className="text-white/70 text-xs">{brightness}% brightness</div>
+          <div className="text-xs" style={{ color: "#a89984" }}>
+            {brightness}% brightness
+          </div>
         </div>
       </div>
 
       {/* Brightness Slider */}
       <div className="mb-6">
-        <label className="block text-white/90 text-sm font-medium mb-3">
+        <label
+          className="block text-sm font-medium mb-3"
+          style={{ color: "#8ec07c" }}
+        >
           Brightness: {brightness}%
         </label>
         <div className="relative">
@@ -322,7 +420,10 @@ export const WheelColorPicker: React.FC<WheelColorPickerProps> = ({
 
       {/* Quick Colors */}
       <div>
-        <label className="block text-white/90 text-sm font-medium mb-3">
+        <label
+          className="block text-sm font-medium mb-3"
+          style={{ color: "#8ec07c" }}
+        >
           Quick Colors
         </label>
         <div className="flex justify-between gap-2">
@@ -331,11 +432,13 @@ export const WheelColorPicker: React.FC<WheelColorPickerProps> = ({
               key={color.name}
               onClick={() => handleQuickColorSelect(color.hex)}
               className={`w-12 h-12 rounded-xl border-2 transition-all duration-200 hover:scale-110 ${
-                value === color.hex && !isWarmWhite
-                  ? "border-white shadow-lg shadow-white/25"
-                  : "border-white/30 hover:border-white/60"
+                value === color.hex && !isWarmWhite ? "shadow-lg" : ""
               }`}
-              style={{ backgroundColor: color.hex }}
+              style={{
+                backgroundColor: color.displayColor,
+                borderColor:
+                  value === color.hex && !isWarmWhite ? "#ebdbb2" : "#504945",
+              }}
               title={color.name}
             />
           ))}
