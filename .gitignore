@@ -1,0 +1,7 @@
+.next
+__pycache__
+node_modules
+.env.local
+bun.lock
+next-env.d.ts
+next.config.js
