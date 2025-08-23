@@ -8,8 +8,9 @@ import os
 import json
 import socket
 import asyncio
-from typing import Dict, List, Optional, Union
+from typing import Dict, List, Optional, Union, Callable
 from contextlib import asynccontextmanager
+from asyncio import Queue, create_task
 
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
@@ -75,6 +76,59 @@ CONFIG = load_config()
 BULBS = CONFIG.get("bulbs", {})
 GROUPS = CONFIG.get("groups", {})
 COLORS = CONFIG.get("colors", {})
+
+
+class BulbCommandQueue:
+    """Queue system to prevent command flooding and ensure only latest commands are processed"""
+
+    def __init__(self):
+        self.queues: Dict[str, Queue] = {}  # bulb_name -> Queue
+        self.workers: Dict[str, asyncio.Task] = {}  # bulb_name -> Task
+        self.running = True
+
+    async def enqueue_command(self, bulb_name: str, command: Callable):
+        """Enqueue a command, replacing any pending commands for the same bulb"""
+        if bulb_name not in self.queues:
+            self.queues[bulb_name] = Queue(maxsize=1)  # Only keep latest command
+            self.workers[bulb_name] = create_task(self._worker(bulb_name))
+
+        # Clear queue and add only latest command
+        while not self.queues[bulb_name].empty():
+            try:
+                self.queues[bulb_name].get_nowait()
+            except:
+                break
+
+        try:
+            await self.queues[bulb_name].put(command)
+        except Exception as e:
+            print(f"Failed to enqueue command for {bulb_name}: {e}")
+
+    async def _worker(self, bulb_name: str):
+        """Worker that processes commands for a specific bulb"""
+        while self.running:
+            try:
+                # Wait for a command with timeout to allow graceful shutdown
+                command = await asyncio.wait_for(
+                    self.queues[bulb_name].get(), timeout=1.0
+                )
+                await command()
+                await asyncio.sleep(0.05)  # Small delay between commands
+            except asyncio.TimeoutError:
+                continue  # No command received, check if still running
+            except Exception as e:
+                print(f"Error processing command for {bulb_name}: {e}")
+                await asyncio.sleep(0.1)  # Brief pause on error
+
+    async def shutdown(self):
+        """Gracefully shutdown all workers"""
+        self.running = False
+        for worker in self.workers.values():
+            if not worker.done():
+                worker.cancel()
+
+        # Wait for workers to finish
+        await asyncio.gather(*self.workers.values(), return_exceptions=True)
 
 
 class LEDController:
@@ -213,19 +267,31 @@ class ConnectionManager:
         self.active_connections.append(websocket)
 
     def disconnect(self, websocket: WebSocket):
-        self.active_connections.remove(websocket)
+        """FIXED: Handle connection removal safely"""
+        try:
+            self.active_connections.remove(websocket)
+        except ValueError:
+            # Connection was already removed or never added
+            pass
 
     async def broadcast(self, message: dict):
+        """Broadcast message to all active connections"""
+        dead_connections = []
         for connection in self.active_connections:
             try:
                 await connection.send_json(message)
-            except:
-                # Remove dead connections
-                self.disconnect(connection)
+            except Exception:
+                # Mark dead connections for removal
+                dead_connections.append(connection)
+
+        # Remove dead connections
+        for dead_conn in dead_connections:
+            self.disconnect(dead_conn)
 
 
-# Global connection manager
+# Global instances
 manager = ConnectionManager()
+command_queue = BulbCommandQueue()
 
 
 # FastAPI App Setup
@@ -238,6 +304,7 @@ async def lifespan(app: FastAPI):
     yield
     # Shutdown
     print("LED Controller API shutting down...")
+    await command_queue.shutdown()
 
 
 app = FastAPI(
@@ -346,67 +413,69 @@ async def get_bulb_status(bulb_name: str):
 
 @app.post("/bulbs/{bulb_name}/command")
 async def control_bulb(bulb_name: str, command: BulbCommand):
-    """Send command to a specific bulb"""
+    """Send command to a specific bulb using the command queue"""
     if bulb_name not in BULBS:
         raise HTTPException(status_code=404, detail="Bulb not found")
 
-    led = LEDController(BULBS[bulb_name])
-    success = False
+    # Create command function to be queued
+    async def execute_command():
+        try:
+            led = LEDController(BULBS[bulb_name])
+            success = False
 
-    try:
-        if command.action == "on":
-            success = await led.power_on()
-        elif command.action == "off":
-            success = await led.power_off()
-        elif command.action == "toggle":
-            status = await led.query_status()
-            if status and status["on"]:
-                success = await led.power_off()
-            else:
+            if command.action == "on":
                 success = await led.power_on()
-        elif command.action == "color" and command.color:
-            if command.color.upper() in ["WW", "WARMWHITE", "WARM"]:
-                brightness = command.brightness or 100
+            elif command.action == "off":
+                success = await led.power_off()
+            elif command.action == "toggle":
+                status = await led.query_status()
+                if status and status["on"]:
+                    success = await led.power_off()
+                else:
+                    success = await led.power_on()
+            elif command.action == "color" and command.color:
+                if command.color.upper() in ["WW", "WARMWHITE", "WARM"]:
+                    brightness = command.brightness or 100
+                    brightness_val = int((brightness * 255) / 100)
+                    success = await led.set_warm_white(brightness_val)
+                else:
+                    # Handle hex colors or named colors
+                    color_hex = COLORS.get(command.color.lower(), command.color)
+                    r, g, b = led.hex_to_rgb(color_hex)
+
+                    if command.brightness is not None:
+                        r, g, b = led.apply_brightness_to_rgb(
+                            r, g, b, command.brightness
+                        )
+
+                    success = await led.set_rgb(r, g, b)
+            elif command.action == "brightness" and command.brightness is not None:
+                success = await led.set_brightness_only(command.brightness)
+            elif command.action == "warm_white":
+                brightness = command.warm_white or command.brightness or 100
                 brightness_val = int((brightness * 255) / 100)
                 success = await led.set_warm_white(brightness_val)
-            else:
-                # Handle hex colors or named colors
-                color_hex = COLORS.get(command.color.lower(), command.color)
-                r, g, b = led.hex_to_rgb(color_hex)
 
-                if command.brightness is not None:
-                    r, g, b = led.apply_brightness_to_rgb(r, g, b, command.brightness)
+            if success:
+                # Get updated status and broadcast to WebSocket clients
+                updated_status = await format_bulb_status(bulb_name, BULBS[bulb_name])
+                await manager.broadcast(
+                    {"type": "bulb_update", "data": updated_status.dict()}
+                )
 
-                success = await led.set_rgb(r, g, b)
-        elif command.action == "brightness" and command.brightness is not None:
-            success = await led.set_brightness_only(command.brightness)
-        elif command.action == "warm_white":
-            brightness = command.warm_white or command.brightness or 100
-            brightness_val = int((brightness * 255) / 100)
-            success = await led.set_warm_white(brightness_val)
-        else:
-            raise HTTPException(
-                status_code=400, detail="Invalid command or missing parameters"
-            )
+        except Exception as e:
+            print(f"Command execution failed for {bulb_name}: {e}")
 
-        if not success:
-            raise HTTPException(
-                status_code=500, detail="Failed to send command to bulb"
-            )
+    # Queue the command
+    await command_queue.enqueue_command(bulb_name, execute_command)
 
-        # Get updated status and broadcast to WebSocket clients
-        updated_status = await format_bulb_status(bulb_name, BULBS[bulb_name])
-        await manager.broadcast({"type": "bulb_update", "data": updated_status.dict()})
-
-        return updated_status
-
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Command failed: {str(e)}")
+    # Return immediate response - status will be updated via WebSocket
+    return {"message": f"Command queued for {bulb_name}", "action": command.action}
 
 
 @app.post("/groups/command")
 async def control_group(command: GroupCommand):
-    """Send command to multiple bulbs/groups"""
+    """Send command to multiple bulbs/groups using the command queue"""
     all_bulbs = []
 
     # Resolve all target bulbs
@@ -424,8 +493,7 @@ async def control_group(command: GroupCommand):
             unique_bulbs.append((name, ip))
             seen.add(name)
 
-    # Execute commands in parallel
-    tasks = []
+    # Queue commands for each bulb
     for name, ip in unique_bulbs:
         bulb_command = BulbCommand(
             action=command.action,
@@ -433,29 +501,22 @@ async def control_group(command: GroupCommand):
             brightness=command.brightness,
             warm_white=command.warm_white,
         )
-        tasks.append(control_single_bulb(name, ip, bulb_command))
 
-    results = await asyncio.gather(*tasks, return_exceptions=True)
+        # Create command function for this specific bulb
+        async def execute_group_command(bulb_name=name, bulb_ip=ip, cmd=bulb_command):
+            try:
+                result = await control_single_bulb(bulb_name, bulb_ip, cmd)
+                # Broadcast individual bulb update
+                await manager.broadcast({"type": "bulb_update", "data": result.dict()})
+            except Exception as e:
+                print(f"Group command failed for {bulb_name}: {e}")
 
-    # Collect successful results
-    successful_updates = []
-    errors = []
-
-    for i, result in enumerate(results):
-        if isinstance(result, Exception):
-            errors.append(f"{unique_bulbs[i][0]}: {str(result)}")
-        else:
-            successful_updates.append(result)
-
-    # Broadcast updates
-    if successful_updates:
-        await manager.broadcast({"type": "group_update", "data": successful_updates})
+        await command_queue.enqueue_command(name, execute_group_command)
 
     return {
-        "success": len(successful_updates),
-        "failed": len(errors),
-        "errors": errors,
-        "updated_bulbs": successful_updates,
+        "message": f"Commands queued for {len(unique_bulbs)} bulbs",
+        "targets": [name for name, _ in unique_bulbs],
+        "action": command.action,
     }
 
 
@@ -536,6 +597,10 @@ async def websocket_endpoint(websocket: WebSocket):
             await websocket.send_json({"type": "pong", "data": data})
 
     except WebSocketDisconnect:
+        pass  # Normal disconnection
+    except Exception as e:
+        print(f"WebSocket error: {e}")
+    finally:
         manager.disconnect(websocket)
 
 

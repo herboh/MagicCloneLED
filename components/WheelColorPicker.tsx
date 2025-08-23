@@ -30,7 +30,8 @@ export const WheelColorPicker: React.FC<WheelColorPickerProps> = ({
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [isDragging, setIsDragging] = useState(false);
   const lastUpdateTime = useRef(0);
-  const UPDATE_INTERVAL = 100; // milliseconds between updates when dragging
+  const pendingUpdate = useRef<NodeJS.Timeout | null>(null);
+  const UPDATE_INTERVAL = 150; // Reduced frequency: ~6.7 requests per second
 
   // Single source of truth for selected color
   const [selectedColor, setSelectedColor] = useState({
@@ -39,6 +40,9 @@ export const WheelColorPicker: React.FC<WheelColorPickerProps> = ({
   });
   const [visualHue, setVisualHue] = useState(0);
   const [visualSaturation, setVisualSaturation] = useState(100);
+
+  // Track if we're updating from external source to prevent feedback loops
+  const isExternalUpdate = useRef(false);
 
   const wheelSize = 300;
   const centerX = wheelSize / 2;
@@ -104,13 +108,22 @@ export const WheelColorPicker: React.FC<WheelColorPickerProps> = ({
     [selectedColor, hslToHex],
   );
 
-  // Update selected color when value prop changes (external updates)
+  // FIXED: Only update from external props when NOT dragging and NOT from our own updates
   useEffect(() => {
-    if (!isWarmWhite && value) {
+    if (!isDragging && !isWarmWhite && value && !isExternalUpdate.current) {
       const [h, s] = hexToHsl(value);
-      setSelectedColor({ hue: h, saturation: s });
+      const newHue = Math.round(h);
+      const newSat = Math.round(s);
+
+      // Only update if significantly different to avoid micro-updates
+      if (
+        Math.abs(selectedColor.hue - newHue) > 2 ||
+        Math.abs(selectedColor.saturation - newSat) > 2
+      ) {
+        setSelectedColor({ hue: newHue, saturation: newSat });
+      }
     }
-  }, [value, isWarmWhite, hexToHsl]);
+  }, [value, isWarmWhite, hexToHsl, isDragging, selectedColor]);
 
   // Animate dot with spring physics (simplified - only when not dragging)
   useEffect(() => {
@@ -278,6 +291,38 @@ export const WheelColorPicker: React.FC<WheelColorPickerProps> = ({
     centerY,
   ]);
 
+  // FIXED: Improved debounced update function
+  const sendColorUpdate = useCallback(
+    (hue: number, saturation: number) => {
+      // Clear any pending updates
+      if (pendingUpdate.current) {
+        clearTimeout(pendingUpdate.current);
+      }
+
+      // Mark as our own update to prevent feedback loop
+      isExternalUpdate.current = true;
+
+      const executeUpdate = () => {
+        const newColor = hslToHex(hue, saturation, 50);
+        onColorChange(newColor, brightness, false);
+
+        // Reset flag after a short delay to allow external updates again
+        setTimeout(() => {
+          isExternalUpdate.current = false;
+        }, 200);
+      };
+
+      // If dragging, debounce the updates
+      if (isDragging) {
+        pendingUpdate.current = setTimeout(executeUpdate, UPDATE_INTERVAL);
+      } else {
+        // Immediate update when not dragging (e.g., quick color buttons)
+        executeUpdate();
+      }
+    },
+    [hslToHex, onColorChange, brightness, isDragging],
+  );
+
   // Handle mouse/touch events
   const handlePointerDown = (e: React.PointerEvent) => {
     e.preventDefault();
@@ -296,6 +341,18 @@ export const WheelColorPicker: React.FC<WheelColorPickerProps> = ({
   const handlePointerUp = (e: React.PointerEvent) => {
     setIsDragging(false);
     (e.target as HTMLElement).releasePointerCapture(e.pointerId);
+
+    // Send final update on drag end to ensure sync
+    const finalColor = hslToHex(
+      selectedColor.hue,
+      selectedColor.saturation,
+      50,
+    );
+    isExternalUpdate.current = true;
+    onColorChange(finalColor, brightness, false);
+    setTimeout(() => {
+      isExternalUpdate.current = false;
+    }, 200);
   };
 
   const handleColorSelection = (e: React.PointerEvent) => {
@@ -336,40 +393,58 @@ export const WheelColorPicker: React.FC<WheelColorPickerProps> = ({
       return;
     }
 
-    // Update selected color state
+    // Round to reduce micro-updates
+    hue = Math.round(hue);
+    saturation = Math.round(saturation);
+
+    // Update selected color state immediately for visual feedback
     setSelectedColor({ hue, saturation });
 
-    // Throttle updates when dragging
-    const now = Date.now();
-    const timeSinceLastUpdate = now - lastUpdateTime.current;
-
-    // Only send updates every UPDATE_INTERVAL ms when dragging
-    if (isDragging && timeSinceLastUpdate < UPDATE_INTERVAL) {
-      return;
-    }
-
-    lastUpdateTime.current = now;
-    const newColor = hslToHex(hue, saturation, 50);
-    onColorChange(newColor, brightness, false);
+    // Send update (debounced if dragging)
+    sendColorUpdate(hue, saturation);
   };
 
   const handleWarmWhiteToggle = () => {
+    isExternalUpdate.current = true;
     onColorChange(currentHex, brightness, !isWarmWhite);
+    setTimeout(() => {
+      isExternalUpdate.current = false;
+    }, 200);
   };
 
   const handleBrightnessChange = (newBrightness: number) => {
+    isExternalUpdate.current = true;
     onColorChange(
       isWarmWhite ? currentHex : currentHex,
       newBrightness,
       isWarmWhite,
     );
+    setTimeout(() => {
+      isExternalUpdate.current = false;
+    }, 200);
   };
 
   const handleQuickColorSelect = (hex: string) => {
     const [h, s] = hexToHsl(hex);
-    setSelectedColor({ hue: h, saturation: s });
+    const roundedH = Math.round(h);
+    const roundedS = Math.round(s);
+    setSelectedColor({ hue: roundedH, saturation: roundedS });
+
+    isExternalUpdate.current = true;
     onColorChange(hex, brightness, false);
+    setTimeout(() => {
+      isExternalUpdate.current = false;
+    }, 200);
   };
+
+  // Cleanup pending updates on unmount
+  useEffect(() => {
+    return () => {
+      if (pendingUpdate.current) {
+        clearTimeout(pendingUpdate.current);
+      }
+    };
+  }, []);
 
   return (
     <div
