@@ -1,6 +1,10 @@
-// components/WheelColorPicker.tsx
-import { ArrowDown10 } from "lucide-react";
-import React, { useRef, useEffect, useState, useCallback } from "react";
+import React, {
+  useRef,
+  useEffect,
+  useState,
+  useCallback,
+  useMemo,
+} from "react";
 
 interface WheelColorPickerProps {
   value: string;
@@ -25,14 +29,22 @@ export const WheelColorPicker: React.FC<WheelColorPickerProps> = ({
 }) => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [isDragging, setIsDragging] = useState(false);
-  const [currentHue, setCurrentHue] = useState(0);
-  const [currentSaturation, setCurrentSaturation] = useState(100);
+  const lastUpdateTime = useRef(0);
+  const UPDATE_INTERVAL = 100; // milliseconds between updates when dragging
+
+  // Single source of truth for selected color
+  const [selectedColor, setSelectedColor] = useState({
+    hue: 0,
+    saturation: 100,
+  });
+  const [visualHue, setVisualHue] = useState(0);
+  const [visualSaturation, setVisualSaturation] = useState(100);
 
   const wheelSize = 300;
   const centerX = wheelSize / 2;
   const centerY = wheelSize / 2;
-  const outerRadius = wheelSize / 2 - 6; // Reduced from 10 to 15 to bring border in slightly
-  const innerRadius = outerRadius * 0.53; // Creates the donut shape
+  const outerRadius = wheelSize / 2 - 6;
+  const innerRadius = outerRadius * 0.53;
 
   // Predefined colors - display gruvbox colors but send original hex values
   const quickColors = [
@@ -48,13 +60,11 @@ export const WheelColorPicker: React.FC<WheelColorPickerProps> = ({
     const r = parseInt(hex.slice(1, 3), 16) / 255;
     const g = parseInt(hex.slice(3, 5), 16) / 255;
     const b = parseInt(hex.slice(5, 7), 16) / 255;
-
     const max = Math.max(r, g, b);
     const min = Math.min(r, g, b);
     let h = 0,
       s = 0,
       l = (max + min) / 2;
-
     if (max !== min) {
       const d = max - min;
       s = l > 0.5 ? d / (2 - max - min) : d / (max + min);
@@ -71,7 +81,6 @@ export const WheelColorPicker: React.FC<WheelColorPickerProps> = ({
       }
       h /= 6;
     }
-
     return [h * 360, s * 100, l * 100];
   }, []);
 
@@ -89,20 +98,74 @@ export const WheelColorPicker: React.FC<WheelColorPickerProps> = ({
     return `#${f(0)}${f(8)}${f(4)}`;
   }, []);
 
-  // Update current hue and saturation when value changes
+  // Derive current hex from selected color state
+  const currentHex = useMemo(
+    () => hslToHex(selectedColor.hue, selectedColor.saturation, 50),
+    [selectedColor, hslToHex],
+  );
+
+  // Update selected color when value prop changes (external updates)
   useEffect(() => {
     if (!isWarmWhite && value) {
       const [h, s] = hexToHsl(value);
-      setCurrentHue(h);
-      setCurrentSaturation(s);
+      setSelectedColor({ hue: h, saturation: s });
     }
   }, [value, isWarmWhite, hexToHsl]);
+
+  // Animate dot with spring physics (simplified - only when not dragging)
+  useEffect(() => {
+    if (isDragging) {
+      // Directly set visual position when dragging for immediate feedback
+      setVisualHue(selectedColor.hue);
+      setVisualSaturation(selectedColor.saturation);
+      return;
+    }
+
+    // Only animate when not dragging
+    let frame: number;
+    let velocityHue = 0;
+    let velocitySat = 0;
+    const stiffness = 0.15;
+    const damping = 0.75;
+
+    const animate = () => {
+      setVisualHue((prev) => {
+        const diff = selectedColor.hue - prev;
+        const force = diff * stiffness;
+        velocityHue = velocityHue * damping + force;
+        const next = prev + velocityHue;
+
+        // Stop animating when close enough
+        if (Math.abs(diff) < 0.5 && Math.abs(velocityHue) < 0.5) {
+          return selectedColor.hue;
+        }
+        return next;
+      });
+
+      setVisualSaturation((prev) => {
+        const diff = selectedColor.saturation - prev;
+        const force = diff * stiffness;
+        velocitySat = velocitySat * damping + force;
+        const next = prev + velocitySat;
+
+        // Stop animating when close enough
+        if (Math.abs(diff) < 0.5 && Math.abs(velocitySat) < 0.5) {
+          return selectedColor.saturation;
+        }
+        return next;
+      });
+
+      frame = requestAnimationFrame(animate);
+    };
+
+    frame = requestAnimationFrame(animate);
+    return () => cancelAnimationFrame(frame);
+  }, [selectedColor, isDragging]);
 
   // Draw the color wheel
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
-
     const ctx = canvas.getContext("2d");
     if (!ctx) return;
 
@@ -130,7 +193,6 @@ export const WheelColorPicker: React.FC<WheelColorPickerProps> = ({
           const h = hue / 60;
           const s = saturation / 100;
           const l = 0.5;
-
           const c = (1 - Math.abs(2 * l - 1)) * s;
           const x_val = c * (1 - Math.abs((h % 2) - 1));
           const m = l - c / 2;
@@ -166,21 +228,17 @@ export const WheelColorPicker: React.FC<WheelColorPickerProps> = ({
           }
 
           const pixelIndex = (y * wheelSize + x) * 4;
-          data[pixelIndex] = Math.round((r + m) * 255); // Red
-          data[pixelIndex + 1] = Math.round((g + m) * 255); // Green
-          data[pixelIndex + 2] = Math.round((b + m) * 255); // Blue
-          data[pixelIndex + 3] = 255; // Alpha
+          data[pixelIndex] = Math.round((r + m) * 255);
+          data[pixelIndex + 1] = Math.round((g + m) * 255);
+          data[pixelIndex + 2] = Math.round((b + m) * 255);
+          data[pixelIndex + 3] = 255;
         }
       }
     }
 
     ctx.putImageData(imageData, 0, 0);
 
-    // Apply blur after drawing the color wheel
-    ctx.drawImage(canvas, 0, 0);
-    ctx.filter = "none"; // reset filter so it doesn’t affect later drawings
-
-    // Draw border after blur
+    // Draw borders
     ctx.beginPath();
     ctx.arc(centerX + 1, centerY + 1, outerRadius + 1.4, 0, 2 * Math.PI);
     ctx.strokeStyle = "#504945";
@@ -195,9 +253,9 @@ export const WheelColorPicker: React.FC<WheelColorPickerProps> = ({
 
     // Draw selection indicator if not warm white
     if (!isWarmWhite) {
-      const angle = (currentHue * Math.PI) / 180;
+      const angle = (visualHue * Math.PI) / 180;
       const radius =
-        innerRadius + (currentSaturation / 100) * (outerRadius - innerRadius);
+        innerRadius + (visualSaturation / 100) * (outerRadius - innerRadius);
       const indicatorX = centerX + radius * Math.cos(angle);
       const indicatorY = centerY + radius * Math.sin(angle);
 
@@ -209,13 +267,24 @@ export const WheelColorPicker: React.FC<WheelColorPickerProps> = ({
       ctx.lineWidth = 2;
       ctx.stroke();
     }
-  }, [currentHue, currentSaturation, isWarmWhite, innerRadius, outerRadius]);
+  }, [
+    visualHue,
+    visualSaturation,
+    isWarmWhite,
+    innerRadius,
+    outerRadius,
+    wheelSize,
+    centerX,
+    centerY,
+  ]);
 
   // Handle mouse/touch events
   const handlePointerDown = (e: React.PointerEvent) => {
     e.preventDefault();
     setIsDragging(true);
+    lastUpdateTime.current = 0; // Reset throttle on new drag
     handleColorSelection(e);
+    (e.target as HTMLElement).setPointerCapture(e.pointerId);
   };
 
   const handlePointerMove = (e: React.PointerEvent) => {
@@ -224,8 +293,9 @@ export const WheelColorPicker: React.FC<WheelColorPickerProps> = ({
     }
   };
 
-  const handlePointerUp = () => {
+  const handlePointerUp = (e: React.PointerEvent) => {
     setIsDragging(false);
+    (e.target as HTMLElement).releasePointerCapture(e.pointerId);
   };
 
   const handleColorSelection = (e: React.PointerEvent) => {
@@ -239,7 +309,6 @@ export const WheelColorPicker: React.FC<WheelColorPickerProps> = ({
     const dy = y - centerY;
     const distance = Math.sqrt(dx * dx + dy * dy);
 
-    let finalDistance = distance;
     let hue: number;
     let saturation: number;
 
@@ -256,11 +325,9 @@ export const WheelColorPicker: React.FC<WheelColorPickerProps> = ({
     else if (isDragging) {
       if (distance < innerRadius) {
         // Too close to center - snap to inner edge
-        finalDistance = innerRadius;
         saturation = 0;
       } else {
         // Too far from center - snap to outer edge
-        finalDistance = outerRadius;
         saturation = 100;
       }
     }
@@ -269,25 +336,38 @@ export const WheelColorPicker: React.FC<WheelColorPickerProps> = ({
       return;
     }
 
-    setCurrentHue(hue);
-    setCurrentSaturation(saturation);
+    // Update selected color state
+    setSelectedColor({ hue, saturation });
 
+    // Throttle updates when dragging
+    const now = Date.now();
+    const timeSinceLastUpdate = now - lastUpdateTime.current;
+
+    // Only send updates every UPDATE_INTERVAL ms when dragging
+    if (isDragging && timeSinceLastUpdate < UPDATE_INTERVAL) {
+      return;
+    }
+
+    lastUpdateTime.current = now;
     const newColor = hslToHex(hue, saturation, 50);
     onColorChange(newColor, brightness, false);
   };
 
   const handleWarmWhiteToggle = () => {
-    onColorChange(value, brightness, !isWarmWhite);
+    onColorChange(currentHex, brightness, !isWarmWhite);
   };
 
   const handleBrightnessChange = (newBrightness: number) => {
-    onColorChange(value, newBrightness, isWarmWhite);
+    onColorChange(
+      isWarmWhite ? currentHex : currentHex,
+      newBrightness,
+      isWarmWhite,
+    );
   };
 
   const handleQuickColorSelect = (hex: string) => {
     const [h, s] = hexToHsl(hex);
-    setCurrentHue(h);
-    setCurrentSaturation(s);
+    setSelectedColor({ hue: h, saturation: s });
     onColorChange(hex, brightness, false);
   };
 
@@ -337,26 +417,12 @@ export const WheelColorPicker: React.FC<WheelColorPickerProps> = ({
             onPointerDown={handlePointerDown}
             onPointerMove={handlePointerMove}
             onPointerUp={handlePointerUp}
-            onPointerLeave={handlePointerUp}
             style={{
               touchAction: "none",
               imageRendering: "auto",
             }}
           />
 
-          {/* Inner circle border to clean up the donut hole */}
-          {/* <div */}
-          {/*   className="absolute rounded-full border-2 pointer-events-none" */}
-          {/*   style={{ */}
-          {/*     width: `${innerRadius * 2}px`, */}
-          {/*     height: `${innerRadius * 2}px`, */}
-          {/*     top: "50%", */}
-          {/*     left: "50%", */}
-          {/*     transform: "translate(-50%, -50%)", */}
-          {/*     borderColor: "#504945", */}
-          {/*   }} */}
-          {/* /> */}
-          {/**/}
           {/* Warm White Button in Center */}
           <button
             onClick={handleWarmWhiteToggle}
@@ -382,12 +448,12 @@ export const WheelColorPicker: React.FC<WheelColorPickerProps> = ({
         <div
           className="w-16 h-8 rounded-lg border-2 border-white/30 shadow-lg"
           style={{
-            backgroundColor: isWarmWhite ? "#FFF8DC" : value,
+            backgroundColor: isWarmWhite ? "#FFF8DC" : currentHex,
           }}
         />
         <div className="ml-3" style={{ color: "#ebdbb2" }}>
           <div className="font-mono text-sm">
-            {isWarmWhite ? "Warm White" : value}
+            {isWarmWhite ? "Warm White" : currentHex.toUpperCase()}
           </div>
           <div className="text-xs" style={{ color: "#a89984" }}>
             {brightness}% brightness
@@ -412,7 +478,7 @@ export const WheelColorPicker: React.FC<WheelColorPickerProps> = ({
             onChange={(e) => handleBrightnessChange(parseInt(e.target.value))}
             className="w-full h-4 rounded-lg appearance-none cursor-pointer"
             style={{
-              background: `linear-gradient(to right, #1a1a1a 0%, ${isWarmWhite ? "#FFF8DC" : value} 100%)`,
+              background: `linear-gradient(to right, #1a1a1a 0%, ${isWarmWhite ? "#FFF8DC" : currentHex} 100%)`,
             }}
           />
         </div>
@@ -432,12 +498,14 @@ export const WheelColorPicker: React.FC<WheelColorPickerProps> = ({
               key={color.name}
               onClick={() => handleQuickColorSelect(color.hex)}
               className={`w-12 h-12 rounded-xl border-2 transition-all duration-200 hover:scale-110 ${
-                value === color.hex && !isWarmWhite ? "shadow-lg" : ""
+                currentHex === color.hex && !isWarmWhite ? "shadow-lg" : ""
               }`}
               style={{
                 backgroundColor: color.displayColor,
                 borderColor:
-                  value === color.hex && !isWarmWhite ? "#ebdbb2" : "#504945",
+                  currentHex === color.hex && !isWarmWhite
+                    ? "#ebdbb2"
+                    : "#504945",
               }}
               title={color.name}
             />
