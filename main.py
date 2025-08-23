@@ -1,264 +1,51 @@
 #!/usr/bin/env python3
 """
-FastAPI LED Bulb Controller
-A modern web API for controlling MagicHome LED bulbs
+LED Controller FastAPI Server
+Slim routes-only implementation with HSV color support
 """
 
-import os
-import json
-import socket
 import asyncio
-from typing import Dict, List, Optional, Union, Callable
+import json
 from contextlib import asynccontextmanager
-from asyncio import Queue, create_task
+from typing import List, Optional
 
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.staticfiles import StaticFiles
+from fastapi.middleware.trustedhost import TrustedHostMiddleware
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 import uvicorn
 
-
-# Pydantic Models
-class BulbStatus(BaseModel):
-    name: str
-    online: bool
-    on: bool = False
-    red: int = 0
-    green: int = 0
-    blue: int = 0
-    warm_white: int = 0
-    brightness_percent: int = 0
-    color_hex: str = "#000000"
-    color_name: str = "black"
+from services.bulb_manager import BulbManager
+from utils.color_utils import hex_to_hsv, hsv_to_hex
 
 
-class BulbCommand(BaseModel):
+# Request/Response Models
+class ColorCommand(BaseModel):
     action: str = Field(
-        ..., description="Action: on, off, toggle, color, brightness, warm_white"
+        ..., description="Action: on, off, toggle, color, hsv, warm_white"
     )
-    color: Optional[str] = Field(None, description="Hex color code or color name")
+    h: Optional[float] = Field(None, ge=0, le=360, description="HSV Hue 0-360")
+    s: Optional[float] = Field(None, ge=0, le=100, description="HSV Saturation 0-100")
+    v: Optional[float] = Field(None, ge=0, le=100, description="HSV Value 0-100")
+    hex: Optional[str] = Field(None, description="Hex color code")
     brightness: Optional[int] = Field(
-        None, ge=0, le=100, description="Brightness percentage 0-100"
-    )
-    warm_white: Optional[int] = Field(
-        None, ge=0, le=100, description="Warm white percentage 0-100"
+        None, ge=1, le=100, description="Warm white brightness 1-100"
     )
 
 
 class GroupCommand(BaseModel):
     targets: List[str] = Field(..., description="List of bulb names or group names")
     action: str = Field(..., description="Action to perform")
-    color: Optional[str] = None
-    brightness: Optional[int] = Field(None, ge=0, le=100)
-    warm_white: Optional[int] = Field(None, ge=0, le=100)
+    h: Optional[float] = Field(None, ge=0, le=360)
+    s: Optional[float] = Field(None, ge=0, le=100)
+    v: Optional[float] = Field(None, ge=0, le=100)
+    hex: Optional[str] = None
+    brightness: Optional[int] = Field(None, ge=1, le=100)
 
 
-# Configuration Loading
-def load_config():
-    """Load configuration from config.json or environment variables"""
-    config_path = os.path.join(os.path.dirname(__file__), "config.json")
-
-    # Try loading from file first
-    try:
-        with open(config_path, "r") as f:
-            return json.load(f)
-    except FileNotFoundError:
-        # Fallback to environment variables or default config
-        return {
-            "bulbs": json.loads(os.getenv("LED_BULBS", "{}")),
-            "groups": json.loads(os.getenv("LED_GROUPS", "{}")),
-            "colors": json.loads(os.getenv("LED_COLORS", "{}")),
-        }
-
-
-CONFIG = load_config()
-BULBS = CONFIG.get("bulbs", {})
-GROUPS = CONFIG.get("groups", {})
-COLORS = CONFIG.get("colors", {})
-
-
-class BulbCommandQueue:
-    """Queue system to prevent command flooding and ensure only latest commands are processed"""
-
-    def __init__(self):
-        self.queues: Dict[str, Queue] = {}  # bulb_name -> Queue
-        self.workers: Dict[str, asyncio.Task] = {}  # bulb_name -> Task
-        self.running = True
-
-    async def enqueue_command(self, bulb_name: str, command: Callable):
-        """Enqueue a command, replacing any pending commands for the same bulb"""
-        if bulb_name not in self.queues:
-            self.queues[bulb_name] = Queue(maxsize=1)  # Only keep latest command
-            self.workers[bulb_name] = create_task(self._worker(bulb_name))
-
-        # Clear queue and add only latest command
-        while not self.queues[bulb_name].empty():
-            try:
-                self.queues[bulb_name].get_nowait()
-            except:
-                break
-
-        try:
-            await self.queues[bulb_name].put(command)
-        except Exception as e:
-            print(f"Failed to enqueue command for {bulb_name}: {e}")
-
-    async def _worker(self, bulb_name: str):
-        """Worker that processes commands for a specific bulb"""
-        while self.running:
-            try:
-                # Wait for a command with timeout to allow graceful shutdown
-                command = await asyncio.wait_for(
-                    self.queues[bulb_name].get(), timeout=1.0
-                )
-                await command()
-                await asyncio.sleep(0.05)  # Small delay between commands
-            except asyncio.TimeoutError:
-                continue  # No command received, check if still running
-            except Exception as e:
-                print(f"Error processing command for {bulb_name}: {e}")
-                await asyncio.sleep(0.1)  # Brief pause on error
-
-    async def shutdown(self):
-        """Gracefully shutdown all workers"""
-        self.running = False
-        for worker in self.workers.values():
-            if not worker.done():
-                worker.cancel()
-
-        # Wait for workers to finish
-        await asyncio.gather(*self.workers.values(), return_exceptions=True)
-
-
-class LEDController:
-    def __init__(self, ip: str, port: int = 5577):
-        self.ip = ip
-        self.port = port
-
-    async def send_command(self, data: List[int]) -> bool:
-        """Send command to LED bulb asynchronously"""
-        try:
-            reader, writer = await asyncio.wait_for(
-                asyncio.open_connection(self.ip, self.port), timeout=3.0
-            )
-            writer.write(bytes(data))
-            await writer.drain()
-            writer.close()
-            await writer.wait_closed()
-            return True
-        except Exception as e:
-            print(f"Failed to send command to {self.ip}: {e}")
-            return False
-
-    def checksum(self, data: List[int]) -> int:
-        """Calculate checksum"""
-        return sum(data) & 0xFF
-
-    async def power_on(self) -> bool:
-        """Turn on bulb"""
-        cmd = [0x71, 0x23, 0x0F]
-        cmd.append(self.checksum(cmd))
-        return await self.send_command(cmd)
-
-    async def power_off(self) -> bool:
-        """Turn off bulb"""
-        cmd = [0x71, 0x24, 0x0F]
-        cmd.append(self.checksum(cmd))
-        return await self.send_command(cmd)
-
-    async def set_rgb(self, red: int, green: int, blue: int) -> bool:
-        """Set RGB color (automatically turns on bulb)"""
-        cmd = [0x31, red, green, blue, 0x00, 0x00, 0xF0, 0x0F]
-        cmd.append(self.checksum(cmd))
-        return await self.send_command(cmd)
-
-    async def set_warm_white(self, brightness: int = 255) -> bool:
-        """Set warm white (automatically turns on bulb)"""
-        cmd = [0x31, 0x00, 0x00, 0x00, brightness, 0x00, 0x0F, 0xF0]
-        cmd.append(self.checksum(cmd))
-        return await self.send_command(cmd)
-
-    def apply_brightness_to_rgb(
-        self, r: int, g: int, b: int, brightness_percent: int
-    ) -> tuple:
-        """Apply brightness percentage to RGB values"""
-        scale = brightness_percent / 100.0
-        return int(r * scale), int(g * scale), int(b * scale)
-
-    def hex_to_rgb(self, hex_color: str) -> tuple:
-        """Convert hex to RGB tuple"""
-        hex_color = hex_color.lstrip("#")
-        return tuple(int(hex_color[i : i + 2], 16) for i in (0, 2, 4))
-
-    def rgb_to_hex(self, r: int, g: int, b: int) -> str:
-        """Convert RGB to hex string"""
-        return f"#{r:02x}{g:02x}{b:02x}".upper()
-
-    async def query_status(self) -> Optional[Dict]:
-        """Query bulb status asynchronously"""
-        try:
-            reader, writer = await asyncio.wait_for(
-                asyncio.open_connection(self.ip, self.port), timeout=3.0
-            )
-
-            query_cmd = [0x81, 0x8A, 0x8B, 0x96]
-            writer.write(bytes(query_cmd))
-            await writer.drain()
-
-            response = await asyncio.wait_for(reader.read(1024), timeout=2.0)
-            writer.close()
-            await writer.wait_closed()
-
-            if len(response) >= 14:
-                return {
-                    "on": response[2] == 0x23,
-                    "red": response[6],
-                    "green": response[7],
-                    "blue": response[8],
-                    "warm_white": response[9],
-                }
-        except Exception as e:
-            print(f"Failed to query status from {self.ip}: {e}")
-
-        return None
-
-    async def set_brightness_only(self, brightness_percent: int) -> bool:
-        """Change brightness while preserving current color"""
-        status = await self.query_status()
-
-        if not status or not status["on"]:
-            # If bulb is off, turn on as white at requested brightness
-            r, g, b = self.apply_brightness_to_rgb(255, 255, 255, brightness_percent)
-            return await self.set_rgb(r, g, b)
-
-        if status["warm_white"] > 0:
-            # Currently in warm white mode
-            brightness_val = int((brightness_percent * 255) / 100)
-            return await self.set_warm_white(brightness_val)
-        else:
-            # Currently in RGB mode - preserve color
-            max_val = max(status["red"], status["green"], status["blue"])
-            if max_val == 0:
-                r, g, b = self.apply_brightness_to_rgb(
-                    255, 255, 255, brightness_percent
-                )
-            else:
-                # Scale back to full brightness, then apply new brightness
-                scale = 255.0 / max_val
-                full_r = min(255, int(status["red"] * scale))
-                full_g = min(255, int(status["green"] * scale))
-                full_b = min(255, int(status["blue"] * scale))
-                r, g, b = self.apply_brightness_to_rgb(
-                    full_r, full_g, full_b, brightness_percent
-                )
-
-            return await self.set_rgb(r, g, b)
-
-
+# WebSocket Connection Manager
 class ConnectionManager:
-    """Manages WebSocket connections for real-time updates"""
-
     def __init__(self):
         self.active_connections: List[WebSocket] = []
 
@@ -267,342 +54,302 @@ class ConnectionManager:
         self.active_connections.append(websocket)
 
     def disconnect(self, websocket: WebSocket):
-        """FIXED: Handle connection removal safely"""
         try:
             self.active_connections.remove(websocket)
         except ValueError:
-            # Connection was already removed or never added
             pass
 
     async def broadcast(self, message: dict):
-        """Broadcast message to all active connections"""
         dead_connections = []
         for connection in self.active_connections:
             try:
                 await connection.send_json(message)
-            except Exception:
-                # Mark dead connections for removal
+            except:
                 dead_connections.append(connection)
 
-        # Remove dead connections
         for dead_conn in dead_connections:
             self.disconnect(dead_conn)
 
 
-# Global instances
-manager = ConnectionManager()
-command_queue = BulbCommandQueue()
+# Global instances - Fixed type annotation
+bulb_manager: Optional[BulbManager] = None
+websocket_manager = ConnectionManager()
 
 
-# FastAPI App Setup
+# Rate limiting with simple request debouncing
+request_cache = {}
+DEBOUNCE_MS = 100
+
+
+def should_process_request(bulb_name: str, action: str) -> bool:
+    """Simple debouncing to prevent request flooding"""
+    import time
+
+    key = f"{bulb_name}:{action}"
+    now = time.time() * 1000
+
+    if key in request_cache:
+        if now - request_cache[key] < DEBOUNCE_MS:
+            return False
+
+    request_cache[key] = now
+    return True
+
+
+# WebSocket subscriber callback
+async def on_bulb_state_change(bulb_state):
+    """Notify WebSocket clients of bulb state changes"""
+    await websocket_manager.broadcast(
+        {"type": "bulb_update", "data": bulb_state.to_dict()}
+    )
+
+
+# App lifecycle
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    global bulb_manager
+
     # Startup
-    print("LED Controller API starting up...")
-    print(f"Found {len(BULBS)} bulbs: {list(BULBS.keys())}")
-    print(f"Found {len(GROUPS)} groups: {list(GROUPS.keys())}")
+    bulb_manager = BulbManager()
+    bulb_manager.subscribe(on_bulb_state_change)
+
+    # Initial state refresh
+    await bulb_manager.refresh_all()
+
+    # Start background polling
+    await bulb_manager.start_background_polling()
+
+    print(f"LED Controller started - {len(bulb_manager.bulbs)} bulbs loaded")
+
     yield
+
     # Shutdown
-    print("LED Controller API shutting down...")
-    await command_queue.shutdown()
+    if bulb_manager:
+        await bulb_manager.stop_background_polling()
+    print("LED Controller shutting down")
 
 
+# FastAPI App
 app = FastAPI(
-    title="LED Bulb Controller API",
-    description="Modern web API for controlling MagicHome LED bulbs",
-    version="2.0.0",
+    title="LED Controller API",
+    description="HSV-based LED bulb control with WebSocket updates",
+    version="3.0.0",
     lifespan=lifespan,
 )
 
-# Add CORS middleware
+# Security middleware
+app.add_middleware(TrustedHostMiddleware, allowed_hosts=["*"])
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Configure appropriately for production
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
 
-# Helper Functions
-def get_target_bulbs(target: str) -> List[tuple]:
-    """Get list of (name, ip) tuples for target"""
-    if target in BULBS:
-        return [(target, BULBS[target])]
-    elif target in GROUPS:
-        return [(name, BULBS[name]) for name in GROUPS[target] if name in BULBS]
-    else:
-        return []
-
-
-def get_color_name(hex_color: str) -> str:
-    """Get color name from hex value"""
-    hex_upper = hex_color.upper()
-    return next(
-        (name for name, hex_val in COLORS.items() if hex_val.upper() == hex_upper),
-        hex_color,
-    )
-
-
-async def format_bulb_status(name: str, ip: str) -> BulbStatus:
-    """Get formatted status for a bulb"""
-    led = LEDController(ip)
-    status = await led.query_status()
-
-    if not status:
-        return BulbStatus(name=name, online=False)
-
-    # Calculate brightness and color info
-    if status["warm_white"] > 0:
-        brightness_pct = int((status["warm_white"] * 100) / 255)
-        color_hex = "#FFFFFF"  # Warm white shows as white
-        color_name = "warm white"
-    else:
-        brightness_pct = int(
-            (max(status["red"], status["green"], status["blue"]) * 100) / 255
-        )
-        color_hex = (
-            f"#{status['red']:02x}{status['green']:02x}{status['blue']:02x}".upper()
-        )
-        color_name = get_color_name(color_hex)
-
-    return BulbStatus(
-        name=name,
-        online=True,
-        on=status["on"],
-        red=status["red"],
-        green=status["green"],
-        blue=status["blue"],
-        warm_white=status["warm_white"],
-        brightness_percent=brightness_pct,
-        color_hex=color_hex,
-        color_name=color_name,
-    )
-
-
 # API Routes
 @app.get("/")
 async def root():
-    return {
-        "message": "LED Bulb Controller API",
-        "version": "2.0.0",
-        "endpoints": {
-            "bulbs": "/bulbs",
-            "groups": "/groups",
-            "colors": "/colors",
-            "docs": "/docs",
-        },
-    }
+    return {"message": "LED Controller API v3.0", "color_system": "HSV"}
 
 
-@app.get("/bulbs", response_model=List[BulbStatus])
-async def get_all_bulbs():
-    """Get status of all bulbs"""
-    tasks = [format_bulb_status(name, ip) for name, ip in BULBS.items()]
-    return await asyncio.gather(*tasks)
+@app.get("/bulbs")
+async def get_bulbs():
+    """Get all bulb states"""
+    if not bulb_manager:
+        raise HTTPException(status_code=503, detail="Bulb manager not initialized")
+
+    try:
+        return bulb_manager.get_all_states()
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.get("/bulbs/{bulb_name}", response_model=BulbStatus)
-async def get_bulb_status(bulb_name: str):
-    """Get status of a specific bulb"""
-    if bulb_name not in BULBS:
+@app.get("/bulbs/{bulb_name}")
+async def get_bulb(bulb_name: str):
+    """Get specific bulb state"""
+    if not bulb_manager:
+        raise HTTPException(status_code=503, detail="Bulb manager not initialized")
+
+    bulb = bulb_manager.get_bulb_state(bulb_name)
+    if not bulb:
         raise HTTPException(status_code=404, detail="Bulb not found")
-
-    return await format_bulb_status(bulb_name, BULBS[bulb_name])
+    return bulb.to_dict()
 
 
 @app.post("/bulbs/{bulb_name}/command")
-async def control_bulb(bulb_name: str, command: BulbCommand):
-    """Send command to a specific bulb using the command queue"""
-    if bulb_name not in BULBS:
+async def control_bulb(bulb_name: str, command: ColorCommand):
+    """Control individual bulb with HSV support"""
+    if not bulb_manager:
+        raise HTTPException(status_code=503, detail="Bulb manager not initialized")
+
+    if not should_process_request(bulb_name, command.action):
+        return {"message": "Request debounced", "bulb": bulb_name}
+
+    if bulb_name not in bulb_manager.bulbs:
         raise HTTPException(status_code=404, detail="Bulb not found")
 
-    # Create command function to be queued
-    async def execute_command():
-        try:
-            led = LEDController(BULBS[bulb_name])
-            success = False
+    success = False
 
-            if command.action == "on":
-                success = await led.power_on()
-            elif command.action == "off":
-                success = await led.power_off()
-            elif command.action == "toggle":
-                status = await led.query_status()
-                if status and status["on"]:
-                    success = await led.power_off()
-                else:
-                    success = await led.power_on()
-            elif command.action == "color" and command.color:
-                if command.color.upper() in ["WW", "WARMWHITE", "WARM"]:
-                    brightness = command.brightness or 100
-                    brightness_val = int((brightness * 255) / 100)
-                    success = await led.set_warm_white(brightness_val)
-                else:
-                    # Handle hex colors or named colors
-                    color_hex = COLORS.get(command.color.lower(), command.color)
-                    r, g, b = led.hex_to_rgb(color_hex)
+    try:
+        if command.action == "on":
+            success = await bulb_manager.set_power(bulb_name, True)
 
-                    if command.brightness is not None:
-                        r, g, b = led.apply_brightness_to_rgb(
-                            r, g, b, command.brightness
-                        )
+        elif command.action == "off":
+            success = await bulb_manager.set_power(bulb_name, False)
 
-                    success = await led.set_rgb(r, g, b)
-            elif command.action == "brightness" and command.brightness is not None:
-                success = await led.set_brightness_only(command.brightness)
-            elif command.action == "warm_white":
-                brightness = command.warm_white or command.brightness or 100
-                brightness_val = int((brightness * 255) / 100)
-                success = await led.set_warm_white(brightness_val)
+        elif command.action == "toggle":
+            current_state = bulb_manager.get_bulb_state(bulb_name)
+            if current_state:
+                success = await bulb_manager.set_power(bulb_name, not current_state.on)
 
-            if success:
-                # Get updated status and broadcast to WebSocket clients
-                updated_status = await format_bulb_status(bulb_name, BULBS[bulb_name])
-                await manager.broadcast(
-                    {"type": "bulb_update", "data": updated_status.dict()}
-                )
+        elif command.action == "hsv" and all(
+            x is not None for x in [command.h, command.s, command.v]
+        ):
+            # Type guard ensures these are not None at this point
+            h = command.h if command.h is not None else 0
+            s = command.s if command.s is not None else 0
+            v = command.v if command.v is not None else 0
+            success = await bulb_manager.set_hsv(bulb_name, h, s, v)
 
-        except Exception as e:
-            print(f"Command execution failed for {bulb_name}: {e}")
+        elif command.action == "color" and command.hex:
+            h, s, v = hex_to_hsv(command.hex)
+            success = await bulb_manager.set_hsv(bulb_name, h, s, v)
 
-    # Queue the command
-    await command_queue.enqueue_command(bulb_name, execute_command)
+        elif command.action == "warm_white" and command.brightness:
+            success = await bulb_manager.set_warm_white(bulb_name, command.brightness)
 
-    # Return immediate response - status will be updated via WebSocket
-    return {"message": f"Command queued for {bulb_name}", "action": command.action}
+        else:
+            raise HTTPException(status_code=400, detail="Invalid command parameters")
+
+        if not success:
+            raise HTTPException(status_code=500, detail="Command failed")
+
+        return {
+            "message": f"Command executed",
+            "bulb": bulb_name,
+            "action": command.action,
+        }
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @app.post("/groups/command")
 async def control_group(command: GroupCommand):
-    """Send command to multiple bulbs/groups using the command queue"""
-    all_bulbs = []
+    """Control multiple bulbs/groups with HSV support"""
+    if not bulb_manager:
+        raise HTTPException(status_code=503, detail="Bulb manager not initialized")
 
-    # Resolve all target bulbs
-    for target in command.targets:
-        bulbs = get_target_bulbs(target)
-        if not bulbs:
-            raise HTTPException(status_code=404, detail=f"Target not found: {target}")
-        all_bulbs.extend(bulbs)
+    try:
+        results = {}
 
-    # Remove duplicates while preserving order
-    unique_bulbs = []
-    seen = set()
-    for name, ip in all_bulbs:
-        if name not in seen:
-            unique_bulbs.append((name, ip))
-            seen.add(name)
+        if command.action in ["on", "off"]:
+            power_state = command.action == "on"
+            for target in command.targets:
+                if target in bulb_manager.bulbs:
+                    results[target] = await bulb_manager.set_power(target, power_state)
+                elif target in bulb_manager.groups:
+                    for bulb_name in bulb_manager.groups[target]:
+                        results[bulb_name] = await bulb_manager.set_power(
+                            bulb_name, power_state
+                        )
 
-    # Queue commands for each bulb
-    for name, ip in unique_bulbs:
-        bulb_command = BulbCommand(
-            action=command.action,
-            color=command.color,
-            brightness=command.brightness,
-            warm_white=command.warm_white,
-        )
+        elif command.action == "hsv" and all(
+            x is not None for x in [command.h, command.s, command.v]
+        ):
+            # Type guard ensures these are not None at this point
+            h = command.h if command.h is not None else 0
+            s = command.s if command.s is not None else 0
+            v = command.v if command.v is not None else 0
+            results = await bulb_manager.set_group_hsv(command.targets, h, s, v)
 
-        # Create command function for this specific bulb
-        async def execute_group_command(bulb_name=name, bulb_ip=ip, cmd=bulb_command):
-            try:
-                result = await control_single_bulb(bulb_name, bulb_ip, cmd)
-                # Broadcast individual bulb update
-                await manager.broadcast({"type": "bulb_update", "data": result.dict()})
-            except Exception as e:
-                print(f"Group command failed for {bulb_name}: {e}")
+        elif command.action == "color" and command.hex:
+            h, s, v = hex_to_hsv(command.hex)
+            results = await bulb_manager.set_group_hsv(command.targets, h, s, v)
 
-        await command_queue.enqueue_command(name, execute_group_command)
+        elif command.action == "warm_white" and command.brightness:
+            for target in command.targets:
+                if target in bulb_manager.bulbs:
+                    results[target] = await bulb_manager.set_warm_white(
+                        target, command.brightness
+                    )
+                elif target in bulb_manager.groups:
+                    for bulb_name in bulb_manager.groups[target]:
+                        results[bulb_name] = await bulb_manager.set_warm_white(
+                            bulb_name, command.brightness
+                        )
 
-    return {
-        "message": f"Commands queued for {len(unique_bulbs)} bulbs",
-        "targets": [name for name, _ in unique_bulbs],
-        "action": command.action,
-    }
+        return {"message": "Group command executed", "results": results}
 
-
-async def control_single_bulb(name: str, ip: str, command: BulbCommand) -> BulbStatus:
-    """Helper function to control a single bulb"""
-    led = LEDController(ip)
-    success = False
-
-    if command.action == "on":
-        success = await led.power_on()
-    elif command.action == "off":
-        success = await led.power_off()
-    elif command.action == "toggle":
-        status = await led.query_status()
-        if status and status["on"]:
-            success = await led.power_off()
-        else:
-            success = await led.power_on()
-    elif command.action == "color" and command.color:
-        if command.color.upper() in ["WW", "WARMWHITE", "WARM"]:
-            brightness = command.brightness or 100
-            brightness_val = int((brightness * 255) / 100)
-            success = await led.set_warm_white(brightness_val)
-        else:
-            color_hex = COLORS.get(command.color.lower(), command.color)
-            r, g, b = led.hex_to_rgb(color_hex)
-
-            if command.brightness is not None:
-                r, g, b = led.apply_brightness_to_rgb(r, g, b, command.brightness)
-
-            success = await led.set_rgb(r, g, b)
-    elif command.action == "brightness" and command.brightness is not None:
-        success = await led.set_brightness_only(command.brightness)
-    elif command.action == "warm_white":
-        brightness = command.warm_white or command.brightness or 100
-        brightness_val = int((brightness * 255) / 100)
-        success = await led.set_warm_white(brightness_val)
-
-    if not success:
-        raise Exception("Failed to send command")
-
-    return await format_bulb_status(name, ip)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @app.get("/groups")
 async def get_groups():
-    """Get all available groups"""
-    return {"groups": GROUPS, "bulbs": BULBS}
+    """Get available groups and bulbs"""
+    if not bulb_manager:
+        raise HTTPException(status_code=503, detail="Bulb manager not initialized")
+
+    return {
+        "groups": bulb_manager.get_groups(),
+        "bulbs": list(bulb_manager.bulbs.keys()),
+    }
 
 
-@app.get("/colors")
-async def get_colors():
-    """Get all available color presets"""
-    return {"colors": COLORS}
+@app.post("/bulbs/sync")
+async def force_sync():
+    """Force refresh all bulb states from physical devices"""
+    if not bulb_manager:
+        raise HTTPException(status_code=503, detail="Bulb manager not initialized")
+
+    try:
+        results = await bulb_manager.force_refresh_all()
+        success_count = sum(results.values())
+        return {
+            "message": f"Synced {success_count}/{len(results)} bulbs",
+            "results": results,
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
-    """WebSocket endpoint for real-time updates"""
-    await manager.connect(websocket)
+    """WebSocket for real-time bulb state updates"""
+    await websocket_manager.connect(websocket)
+
     try:
-        # Send initial status
-        bulb_statuses = await asyncio.gather(
-            *[format_bulb_status(name, ip) for name, ip in BULBS.items()]
-        )
+        # Send initial state
+        if bulb_manager:
+            initial_state = bulb_manager.get_all_states()
+            await websocket.send_json({"type": "initial_state", "data": initial_state})
 
-        await websocket.send_json(
-            {
-                "type": "initial_status",
-                "data": [status.dict() for status in bulb_statuses],
-            }
-        )
-
-        # Keep connection alive and handle incoming messages
+        # Keep connection alive
         while True:
-            data = await websocket.receive_text()
-            # Echo back for heartbeat
-            await websocket.send_json({"type": "pong", "data": data})
+            try:
+                data = await asyncio.wait_for(websocket.receive_text(), timeout=30.0)
+                await websocket.send_json({"type": "pong", "data": "alive"})
+            except asyncio.TimeoutError:
+                await websocket.send_json({"type": "ping"})
 
     except WebSocketDisconnect:
-        pass  # Normal disconnection
+        pass
     except Exception as e:
         print(f"WebSocket error: {e}")
     finally:
-        manager.disconnect(websocket)
+        websocket_manager.disconnect(websocket)
 
 
 if __name__ == "__main__":
-    uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True, log_level="info")
+    uvicorn.run(
+        "main:app",
+        host="0.0.0.0",
+        port=8000,
+        reload=False,  # Disabled for production stability
+        log_level="info",
+        access_log=False,  # Reduce log spam
+    )
+

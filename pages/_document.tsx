@@ -6,7 +6,7 @@ export default function Document() {
       <Head>
         <meta
           name="description"
-          content="Smart LED Controller - Control your MagicHome LED bulbs"
+          content="lights dot Chanflix - Control MagicHome LED bulbs"
         />
         <meta name="theme-color" content="#1e293b" />
         <meta name="apple-mobile-web-app-capable" content="yes" />
