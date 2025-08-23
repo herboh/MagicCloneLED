@@ -1,0 +1,19 @@
+version: '3.8'
+
+services:
+  lights:
+    build: .
+    container_name: lights-app
+    restart: unless-stopped
+    networks:
+      - traefik
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.lights.rule=Host(`lights.chanflix.com`)"
+      - "traefik.http.routers.lights.tls=true"
+      - "traefik.http.routers.lights.tls.certresolver=letsencrypt"
+      - "traefik.http.services.lights.loadbalancer.server.port=3000"
+
+networks:
+  traefik:
+    external: true
