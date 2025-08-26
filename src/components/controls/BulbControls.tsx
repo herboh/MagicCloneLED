@@ -105,7 +105,7 @@ export const BulbControls: React.FC<BulbControlsProps> = ({
   // WebSocket connection
   useEffect(() => {
     const connectWebSocket = () => {
-      const ws = new WebSocket("ws://localhost:8000/ws");
+      const ws = new WebSocket("ws://192.168.2.2:8000/ws");
 
       ws.onopen = () => {
         setIsConnected(true);
@@ -212,7 +212,7 @@ export const BulbControls: React.FC<BulbControlsProps> = ({
     const timestamp = new Date().toLocaleTimeString("en-US", {
       hour12: false,
       fractionalSecondDigits: 3,
-    });
+    } as any);
     console.log(
       `${timestamp} | FRONTEND: POST ${endpoint} - ${JSON.stringify(command)}`,
     );
@@ -348,7 +348,7 @@ export const BulbControls: React.FC<BulbControlsProps> = ({
     const timestamp = new Date().toLocaleTimeString("en-US", {
       hour12: false,
       fractionalSecondDigits: 3,
-    });
+    } as any);
     console.log(`${timestamp} | FRONTEND: POST /bulbs/sync - force refresh`);
 
     try {
