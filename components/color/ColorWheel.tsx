@@ -30,6 +30,7 @@ export const ColorWheel: React.FC<ColorWheelProps> = ({
   className = "",
 }) => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const cleanWheelImageData = useRef<ImageData | null>(null);
   const [isDragging, setIsDragging] = useState(false);
   const [isSync, setSyncing] = useState(false);
   const [isEditingHex, setIsEditingHex] = useState(false);
@@ -195,21 +196,21 @@ export const ColorWheel: React.FC<ColorWheelProps> = ({
     ctx.strokeStyle = "#504945";
     ctx.lineWidth = 5;
     ctx.stroke();
+
+    // Store the clean wheel image data for future use
+    cleanWheelImageData.current = ctx.getImageData(0, 0, wheelSize, wheelSize);
   }, [hsvToRgb]); // Only run once on mount
 
   // Draw only the selection dot when h, s, or warm white mode changes
   useEffect(() => {
     const canvas = canvasRef.current;
-    if (!canvas) return;
+    if (!canvas || !cleanWheelImageData.current) return;
     const ctx = canvas.getContext("2d");
     if (!ctx) return;
 
-    // Get the current image data to preserve the wheel
-    const imageData = ctx.getImageData(0, 0, wheelSize, wheelSize);
-    
-    // Clear the canvas and restore the wheel
+    // Clear the canvas and restore the clean wheel
     ctx.clearRect(0, 0, wheelSize, wheelSize);
-    ctx.putImageData(imageData, 0, 0);
+    ctx.putImageData(cleanWheelImageData.current, 0, 0);
 
     // Only draw selection dot if not in warm white mode
     if (!isWarmWhite) {
