@@ -1,15 +1,10 @@
-import React, {
-  useRef,
-  useEffect,
-  useState,
-  useCallback,
-} from "react";
+import React, { useRef, useEffect, useState, useCallback } from "react";
 import { BrightnessSlider } from "./BrightnessSlider";
 import { QuickColors } from "./QuickColors";
 
 interface ColorWheelProps {
   h: number; // HSV Hue 0-360
-  s: number; // HSV Saturation 0-100  
+  s: number; // HSV Saturation 0-100
   v: number; // HSV Value 0-100
   brightness: number; // Overall brightness 0-100
   isWarmWhite: boolean;
@@ -23,7 +18,7 @@ interface ColorWheelProps {
 
 export const ColorWheel: React.FC<ColorWheelProps> = ({
   h,
-  s, 
+  s,
   v,
   brightness,
   isWarmWhite,
@@ -37,6 +32,8 @@ export const ColorWheel: React.FC<ColorWheelProps> = ({
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [isDragging, setIsDragging] = useState(false);
   const [isSync, setSyncing] = useState(false);
+  const [isEditingHex, setIsEditingHex] = useState(false);
+  const [hexInputValue, setHexInputValue] = useState("");
 
   const wheelSize = 300;
   const centerX = wheelSize / 2;
@@ -44,45 +41,106 @@ export const ColorWheel: React.FC<ColorWheelProps> = ({
   const outerRadius = wheelSize / 2 - 6;
   const innerRadius = outerRadius * 0.53;
 
-
   // HSV to RGB conversion
-  const hsvToRgb = useCallback((h: number, s: number, v: number): [number, number, number] => {
-    h = h % 360;
-    s = Math.max(0, Math.min(100, s)) / 100;
-    v = Math.max(0, Math.min(100, v)) / 100;
-    
-    if (s === 0) {
-      const gray = Math.round(v * 255);
-      return [gray, gray, gray];
-    }
-    
-    const hSector = h / 60;
-    const sector = Math.floor(hSector);
-    const f = hSector - sector;
-    
-    const p = v * (1 - s);
-    const q = v * (1 - s * f);
-    const t = v * (1 - s * (1 - f));
-    
-    let r, g, b;
-    switch (sector) {
-      case 0: r = v; g = t; b = p; break;
-      case 1: r = q; g = v; b = p; break;
-      case 2: r = p; g = v; b = t; break;
-      case 3: r = p; g = q; b = v; break;
-      case 4: r = t; g = p; b = v; break;
-      default: r = v; g = p; b = q; break;
-    }
-    
-    return [Math.round(r * 255), Math.round(g * 255), Math.round(b * 255)];
-  }, []);
+  const hsvToRgb = useCallback(
+    (h: number, s: number, v: number): [number, number, number] => {
+      h = h % 360;
+      s = Math.max(0, Math.min(100, s)) / 100;
+      v = Math.max(0, Math.min(100, v)) / 100;
+
+      if (s === 0) {
+        const gray = Math.round(v * 255);
+        return [gray, gray, gray];
+      }
+
+      const hSector = h / 60;
+      const sector = Math.floor(hSector);
+      const f = hSector - sector;
+
+      const p = v * (1 - s);
+      const q = v * (1 - s * f);
+      const t = v * (1 - s * (1 - f));
+
+      let r, g, b;
+      switch (sector) {
+        case 0:
+          r = v;
+          g = t;
+          b = p;
+          break;
+        case 1:
+          r = q;
+          g = v;
+          b = p;
+          break;
+        case 2:
+          r = p;
+          g = v;
+          b = t;
+          break;
+        case 3:
+          r = p;
+          g = q;
+          b = v;
+          break;
+        case 4:
+          r = t;
+          g = p;
+          b = v;
+          break;
+        default:
+          r = v;
+          g = p;
+          b = q;
+          break;
+      }
+
+      return [Math.round(r * 255), Math.round(g * 255), Math.round(b * 255)];
+    },
+    [],
+  );
 
   // Get current hex color
   const currentHex = useCallback(() => {
     if (isWarmWhite) return "#FFF8DC";
     const [r, g, b] = hsvToRgb(h, s, v);
-    return `#${r.toString(16).padStart(2, '0')}${g.toString(16).padStart(2, '0')}${b.toString(16).padStart(2, '0')}`.toUpperCase();
+    return `#${r.toString(16).padStart(2, "0")}${g.toString(16).padStart(2, "0")}${b.toString(16).padStart(2, "0")}`.toUpperCase();
   }, [h, s, v, isWarmWhite, hsvToRgb]);
+
+  // Convert hex to HSV
+  const hexToHsv = useCallback((hex: string): [number, number, number] => {
+    // Remove # if present
+    hex = hex.replace("#", "");
+
+    // Parse RGB values
+    const r = parseInt(hex.slice(0, 2), 16) / 255;
+    const g = parseInt(hex.slice(2, 4), 16) / 255;
+    const b = parseInt(hex.slice(4, 6), 16) / 255;
+
+    const max = Math.max(r, g, b);
+    const min = Math.min(r, g, b);
+    const delta = max - min;
+
+    // Calculate Value
+    const value = max * 100;
+
+    // Calculate Saturation
+    const saturation = max === 0 ? 0 : (delta / max) * 100;
+
+    // Calculate Hue
+    let hue = 0;
+    if (delta !== 0) {
+      if (max === r) {
+        hue = ((g - b) / delta + (g < b ? 6 : 0)) * 60;
+      } else if (max === g) {
+        hue = ((b - r) / delta + 2) * 60;
+      } else {
+        hue = ((r - g) / delta + 4) * 60;
+      }
+    }
+
+    return [Math.round(hue), Math.round(saturation), Math.round(value)];
+  }, []);
 
   // Draw the HSV color wheel
   useEffect(() => {
@@ -107,13 +165,14 @@ export const ColorWheel: React.FC<ColorWheelProps> = ({
           // Convert to HSV coordinates
           const angle = Math.atan2(dy, dx);
           const hue = ((angle * 180) / Math.PI + 360) % 360;
-          const saturation = ((distance - innerRadius) / (outerRadius - innerRadius)) * 100;
-          
+          const saturation =
+            ((distance - innerRadius) / (outerRadius - innerRadius)) * 100;
+
           // Use current V (value) from props for the wheel brightness
           const [r, g, b] = hsvToRgb(hue, saturation, v);
-          
+
           const pixelIndex = (y * wheelSize + x) * 4;
-          data[pixelIndex] = r;     // R
+          data[pixelIndex] = r; // R
           data[pixelIndex + 1] = g; // G
           data[pixelIndex + 2] = b; // B
           data[pixelIndex + 3] = 255; // A
@@ -154,25 +213,31 @@ export const ColorWheel: React.FC<ColorWheelProps> = ({
   }, [h, s, v, isWarmWhite, hsvToRgb]);
 
   // Handle color wheel interaction
-  const handleColorSelection = useCallback((e: React.PointerEvent) => {
-    const canvas = canvasRef.current;
-    if (!canvas) return;
+  const handleColorSelection = useCallback(
+    (e: React.PointerEvent) => {
+      const canvas = canvasRef.current;
+      if (!canvas) return;
 
-    const rect = canvas.getBoundingClientRect();
-    const x = e.clientX - rect.left;
-    const y = e.clientY - rect.top;
-    const dx = x - centerX;
-    const dy = y - centerY;
-    const distance = Math.sqrt(dx * dx + dy * dy);
+      const rect = canvas.getBoundingClientRect();
+      const x = e.clientX - rect.left;
+      const y = e.clientY - rect.top;
+      const dx = x - centerX;
+      const dy = y - centerY;
+      const distance = Math.sqrt(dx * dx + dy * dy);
 
-    if (distance < innerRadius || distance > outerRadius) return;
+      // Always calculate Hue from the angle
+      const angle = Math.atan2(dy, dx);
+      const newH = ((angle * 180) / Math.PI + 360) % 360;
 
-    const angle = Math.atan2(dy, dx);
-    const newH = ((angle * 180) / Math.PI + 360) % 360;
-    const newS = ((distance - innerRadius) / (outerRadius - innerRadius)) * 100;
+      // Calculate Saturation, clamping it between 0 and 100
+      const rawS =
+        ((distance - innerRadius) / (outerRadius - innerRadius)) * 100;
+      const newS = Math.max(0, Math.min(100, rawS));
 
-    onColorChange(Math.round(newH), Math.round(newS), v);
-  }, [v, onColorChange]);
+      onColorChange(Math.round(newH), Math.round(newS), v);
+    },
+    [v, onColorChange, innerRadius, outerRadius],
+  );
 
   // Pointer event handlers
   const handlePointerDown = (e: React.PointerEvent) => {
@@ -204,6 +269,47 @@ export const ColorWheel: React.FC<ColorWheelProps> = ({
     }
   };
 
+  // Handle hex input
+  const handleHexClick = () => {
+    if (isWarmWhite) return; // Don't allow hex input in warm white mode
+    setIsEditingHex(true);
+    setHexInputValue(currentHex());
+  };
+
+  const handleHexInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    setHexInputValue(e.target.value.toUpperCase());
+  };
+
+  const handleHexInputSubmit = () => {
+    const hex = hexInputValue.replace("#", "");
+
+    // Validate hex format
+    if (!/^[0-9A-F]{6}$/i.test(hex)) {
+      // Invalid hex, revert to current value
+      setHexInputValue(currentHex());
+      setIsEditingHex(false);
+      return;
+    }
+
+    // Convert to HSV and update both color and brightness
+    const [newH, newS, newV] = hexToHsv(hex);
+    onColorChange(newH, newS, newV);
+    onBrightnessChange(newV); // Update brightness to match the V component
+    setIsEditingHex(false);
+  };
+
+  const handleHexInputKeyDown = (e: React.KeyboardEvent) => {
+    if (e.key === "Enter") {
+      handleHexInputSubmit();
+    } else if (e.key === "Escape") {
+      setHexInputValue(currentHex());
+      setIsEditingHex(false);
+    }
+  };
+
+  const handleHexInputBlur = () => {
+    handleHexInputSubmit();
+  };
 
   return (
     <div
@@ -317,7 +423,29 @@ export const ColorWheel: React.FC<ColorWheelProps> = ({
         />
         <div className="ml-3" style={{ color: "#ebdbb2" }}>
           <div className="font-mono text-sm">
-            {isWarmWhite ? "Warm White" : currentHex()}
+            {isWarmWhite ? (
+              "Warm White"
+            ) : isEditingHex ? (
+              <input
+                type="text"
+                value={hexInputValue}
+                onChange={handleHexInputChange}
+                onKeyDown={handleHexInputKeyDown}
+                onBlur={handleHexInputBlur}
+                className="bg-[#3c3836] border border-[#504945] rounded px-2 py-1 text-sm font-mono focus:outline-none focus:border-[#8ec07c] w-20"
+                style={{ color: "#ebdbb2" }}
+                autoFocus
+                maxLength={7}
+              />
+            ) : (
+              <button
+                onClick={handleHexClick}
+                className="hover:bg-[#3c3836] rounded px-1 py-0.5 transition-colors duration-200 cursor-pointer"
+                title="Click to edit hex value"
+              >
+                {currentHex()}
+              </button>
+            )}
           </div>
           <div className="text-xs" style={{ color: "#a89984" }}>
             {brightness}% brightness
@@ -341,7 +469,6 @@ export const ColorWheel: React.FC<ColorWheelProps> = ({
         isWarmWhite={isWarmWhite}
         onColorSelect={(newH, newS, newV) => onColorChange(newH, newS, newV)}
       />
-
     </div>
   );
 };

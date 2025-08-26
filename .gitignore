@@ -6,3 +6,5 @@ bun.lock
 next-env.d.ts
 next.config.js
 CLAUDE.md
+components/ColorWheel.bak
+led.bak
