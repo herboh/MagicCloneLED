@@ -9,8 +9,8 @@ from typing import Dict, List, Optional, Callable
 from dataclasses import dataclass
 from datetime import datetime
 
-from controllers.led_controller import LEDController
-from utils.color_utils import rgb_to_hsv, hsv_to_rgb, rgb_to_hex
+from led_controller import LEDController
+from color_utils import rgb_to_hsv, hsv_to_rgb, rgb_to_hex
 
 
 @dataclass
@@ -57,7 +57,7 @@ class BulbState:
 class BulbManager:
     """Manages bulb states and communications"""
 
-    def __init__(self, config_path: str = "config.json"):
+    def __init__(self, config_path: str = "../config.json"):
         self.bulbs: Dict[str, BulbState] = {}
         self.groups: Dict[str, List[str]] = {}
         self.controllers: Dict[str, LEDController] = {}

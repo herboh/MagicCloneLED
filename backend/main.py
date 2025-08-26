@@ -4,20 +4,74 @@ LED Controller FastAPI Server
 Slim routes-only implementation with HSV color support
 """
 
+import argparse
 import asyncio
 import json
+import logging
+import sys
 from contextlib import asynccontextmanager
+from datetime import datetime
 from typing import List, Optional
 
-from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.trustedhost import TrustedHostMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 import uvicorn
 
-from services.bulb_manager import BulbManager
-from utils.color_utils import hex_to_hsv, hsv_to_hex
+from bulb_manager import BulbManager
+from color_utils import hex_to_hsv, hsv_to_hex
+import led_controller
+
+
+# Global debug flag and logger setup
+DEBUG_MODE = False
+debug_logger = None
+
+
+def setup_debug_logging(debug_mode: bool):
+    """Setup debug logging to file with timestamping"""
+    global DEBUG_MODE, debug_logger
+    DEBUG_MODE = debug_mode
+    
+    if not debug_mode:
+        return
+    
+    # Clear existing log file on startup
+    log_file = "led_debug.log"
+    open(log_file, 'w').close()
+    
+    # Setup logger
+    debug_logger = logging.getLogger('led_debug')
+    debug_logger.setLevel(logging.DEBUG)
+    
+    # File handler
+    file_handler = logging.FileHandler(log_file)
+    file_handler.setLevel(logging.DEBUG)
+    
+    # Console handler  
+    console_handler = logging.StreamHandler(sys.stdout)
+    console_handler.setLevel(logging.DEBUG)
+    
+    # Formatter with timestamp
+    formatter = logging.Formatter('%(asctime)s.%(msecs)03d | %(message)s', 
+                                 datefmt='%H:%M:%S')
+    file_handler.setFormatter(formatter)
+    console_handler.setFormatter(formatter)
+    
+    debug_logger.addHandler(file_handler)
+    debug_logger.addHandler(console_handler)
+    debug_logger.info("=== LED Controller Debug Logging Started ===")
+    
+    # Set debug logger for led_controller module
+    led_controller.set_debug_logger(debug_log)
+
+
+def debug_log(message: str):
+    """Log debug message if debug mode is enabled"""
+    if DEBUG_MODE and debug_logger:
+        debug_logger.info(message)
 
 
 # Request/Response Models
@@ -52,14 +106,19 @@ class ConnectionManager:
     async def connect(self, websocket: WebSocket):
         await websocket.accept()
         self.active_connections.append(websocket)
+        debug_log(f"WEBSOCKET: New connection established (total: {len(self.active_connections)})")
 
     def disconnect(self, websocket: WebSocket):
         try:
             self.active_connections.remove(websocket)
+            debug_log(f"WEBSOCKET: Connection disconnected (remaining: {len(self.active_connections)})")
         except ValueError:
             pass
 
     async def broadcast(self, message: dict):
+        if len(self.active_connections) > 0:
+            debug_log(f"WEBSOCKET: Broadcasting to {len(self.active_connections)} clients: {message}")
+        
         dead_connections = []
         for connection in self.active_connections:
             try:
@@ -181,13 +240,17 @@ async def get_bulb(bulb_name: str):
 @app.post("/bulbs/{bulb_name}/command")
 async def control_bulb(bulb_name: str, command: ColorCommand):
     """Control individual bulb with HSV support"""
+    debug_log(f"API: POST /bulbs/{bulb_name}/command - {command.dict()}")
+    
     if not bulb_manager:
         raise HTTPException(status_code=503, detail="Bulb manager not initialized")
 
     if not should_process_request(bulb_name, command.action):
+        debug_log(f"API: Request debounced for {bulb_name}:{command.action}")
         return {"message": "Request debounced", "bulb": bulb_name}
 
     if bulb_name not in bulb_manager.bulbs:
+        debug_log(f"API: Bulb '{bulb_name}' not found")
         raise HTTPException(status_code=404, detail="Bulb not found")
 
     success = False
@@ -224,13 +287,16 @@ async def control_bulb(bulb_name: str, command: ColorCommand):
             raise HTTPException(status_code=400, detail="Invalid command parameters")
 
         if not success:
+            debug_log(f"API: Command failed for {bulb_name} - action: {command.action}")
             raise HTTPException(status_code=500, detail="Command failed")
 
-        return {
+        result = {
             "message": f"Command executed",
             "bulb": bulb_name,
             "action": command.action,
         }
+        debug_log(f"API: Command successful for {bulb_name} - {result}")
+        return result
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -239,6 +305,8 @@ async def control_bulb(bulb_name: str, command: ColorCommand):
 @app.post("/groups/command")
 async def control_group(command: GroupCommand):
     """Control multiple bulbs/groups with HSV support"""
+    debug_log(f"API: POST /groups/command - {command.dict()}")
+    
     if not bulb_manager:
         raise HTTPException(status_code=503, detail="Bulb manager not initialized")
 
@@ -281,7 +349,9 @@ async def control_group(command: GroupCommand):
                             bulb_name, command.brightness
                         )
 
-        return {"message": "Group command executed", "results": results}
+        result = {"message": "Group command executed", "results": results}
+        debug_log(f"API: Group command successful - {result}")
+        return result
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -302,16 +372,20 @@ async def get_groups():
 @app.post("/bulbs/sync")
 async def force_sync():
     """Force refresh all bulb states from physical devices"""
+    debug_log("API: POST /bulbs/sync - Force refresh requested")
+    
     if not bulb_manager:
         raise HTTPException(status_code=503, detail="Bulb manager not initialized")
 
     try:
         results = await bulb_manager.force_refresh_all()
         success_count = sum(results.values())
-        return {
+        result = {
             "message": f"Synced {success_count}/{len(results)} bulbs",
             "results": results,
         }
+        debug_log(f"API: Sync completed - {result}")
+        return result
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -325,25 +399,43 @@ async def websocket_endpoint(websocket: WebSocket):
         # Send initial state
         if bulb_manager:
             initial_state = bulb_manager.get_all_states()
-            await websocket.send_json({"type": "initial_state", "data": initial_state})
+            initial_msg = {"type": "initial_state", "data": initial_state}
+            debug_log(f"WEBSOCKET: Sending initial state to new client: {len(initial_state)} bulbs")
+            await websocket.send_json(initial_msg)
 
         # Keep connection alive
         while True:
             try:
                 data = await asyncio.wait_for(websocket.receive_text(), timeout=30.0)
+                debug_log(f"WEBSOCKET: Received from client: {data}")
                 await websocket.send_json({"type": "pong", "data": "alive"})
             except asyncio.TimeoutError:
+                debug_log("WEBSOCKET: Sending ping to client")
                 await websocket.send_json({"type": "ping"})
 
     except WebSocketDisconnect:
+        debug_log("WEBSOCKET: Client disconnected normally")
         pass
     except Exception as e:
+        debug_log(f"WEBSOCKET: Error occurred: {e}")
         print(f"WebSocket error: {e}")
     finally:
         websocket_manager.disconnect(websocket)
 
 
 if __name__ == "__main__":
+    # Parse command line arguments
+    parser = argparse.ArgumentParser(description='LED Controller FastAPI Server')
+    parser.add_argument('--debug', '--verbose', action='store_true', 
+                       help='Enable debug logging to file and console')
+    args = parser.parse_args()
+    
+    # Setup debug logging
+    setup_debug_logging(args.debug)
+    
+    if args.debug:
+        print("Debug logging enabled - writing to led_debug.log and console")
+    
     uvicorn.run(
         "main:app",
         host="0.0.0.0",

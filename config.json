@@ -1,9 +1,9 @@
 {
   "bulbs": {
-    "lamp": "192.168.1.198",
     "dlamp": "192.168.1.105",
-    "fireplace1": "192.168.1.161",
-    "fireplace2": "192.168.1.165"
+    "lamp": "192.168.1.198",
+    "fireplace1": "192.168.1.199",
+    "fireplace2": "192.168.1.161"
   },
   "groups": {
     "all": ["lamp", "dlamp", "fireplace1", "fireplace2"],

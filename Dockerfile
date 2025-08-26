@@ -1,10 +1,7 @@
 # Multi-stage build for efficiency
 FROM oven/bun:1-slim AS frontend-build
 
-# Accept build-time config for the API URL so Next.js embeds it
-ARG NEXT_PUBLIC_API_URL
 ARG NODE_ENV=production
-ENV NEXT_PUBLIC_API_URL=${NEXT_PUBLIC_API_URL}
 ENV NODE_ENV=${NODE_ENV}
 
 WORKDIR /app
@@ -12,25 +9,22 @@ COPY package.json bun.lock ./
 RUN bun install --frozen-lockfile
 
 # Copy source files needed for build
-COPY components/ ./components/
-COPY lib/ ./lib/
-COPY pages/ ./pages/
+COPY src/ ./src/
 COPY public/ ./public/
-COPY styles/ ./styles/
-COPY next.config.js postcss.config.js tailwind.config.js tsconfig.json next-env.d.ts ./
+COPY index.html vite.config.js postcss.config.js tailwind.config.js tsconfig.json ./
 
 RUN bun run build
 
-# Final runtime image
-FROM python:3.11-slim
+# Final runtime image with nginx for static files
+FROM nginx:alpine AS runtime
+
+# Install Python and dependencies
+RUN apk add --no-cache python3 py3-pip python3-dev gcc musl-dev
 
 WORKDIR /app
 
-# Install system dependencies
-RUN apt-get update && apt-get install -y curl unzip && rm -rf /var/lib/apt/lists/*
-
 # Install Python dependencies
-RUN pip install --no-cache-dir fastapi uvicorn[standard] python-multipart
+RUN pip3 install --no-cache-dir fastapi uvicorn[standard] python-multipart
 
 # Copy Python source files
 COPY main.py config.json ./
@@ -38,17 +32,38 @@ COPY controllers/ ./controllers/
 COPY services/ ./services/
 COPY utils/ ./utils/
 
-# Install Node.js/Bun for serving frontend
-RUN curl -fsSL https://bun.sh/install | bash
-ENV PATH="/root/.bun/bin:$PATH"
+# Copy built frontend static files
+COPY --from=frontend-build /app/dist /usr/share/nginx/html
 
-# Copy built frontend and install production dependencies
-COPY --from=frontend-build /app/.next ./.next
-COPY --from=frontend-build /app/public ./public
-COPY --from=frontend-build /app/package.json ./
-RUN bun install --production
+# Configure nginx
+RUN echo 'server {\n\
+    listen 80;\n\
+    server_name _;\n\
+    \n\
+    # Serve static files\n\
+    location / {\n\
+        root /usr/share/nginx/html;\n\
+        try_files $uri $uri/ /index.html;\n\
+    }\n\
+    \n\
+    # Proxy API calls to Python backend\n\
+    location /api/ {\n\
+        proxy_pass http://localhost:8000/api/;\n\
+        proxy_set_header Host $host;\n\
+        proxy_set_header X-Real-IP $remote_addr;\n\
+    }\n\
+    \n\
+    # Proxy WebSocket to Python backend\n\
+    location /ws {\n\
+        proxy_pass http://localhost:8000/ws;\n\
+        proxy_http_version 1.1;\n\
+        proxy_set_header Upgrade $http_upgrade;\n\
+        proxy_set_header Connection "upgrade";\n\
+        proxy_set_header Host $host;\n\
+    }\n\
+}' > /etc/nginx/conf.d/default.conf
 
-EXPOSE 8000 3000
+EXPOSE 80
 
-# Start both services
-CMD ["sh", "-c", "uvicorn main:app --host 0.0.0.0 --port 8000 & bun run start & wait"]
+# Start both nginx and Python backend
+CMD ["sh", "-c", "python3 main.py & nginx -g 'daemon off;'"]

@@ -21,7 +21,7 @@ interface BulbControlsProps {
   className?: string;
 }
 
-const API_BASE = "/api";
+const API_BASE = "http://192.168.2.2:8000";
 
 export const BulbControls: React.FC<BulbControlsProps> = ({
   className = "",
@@ -105,35 +105,62 @@ export const BulbControls: React.FC<BulbControlsProps> = ({
   // WebSocket connection
   useEffect(() => {
     const connectWebSocket = () => {
-      const ws = new WebSocket(`${API_BASE.replace("http", "ws")}/ws`);
+      const ws = new WebSocket("ws://localhost:8000/ws");
 
       ws.onopen = () => {
         setIsConnected(true);
-        console.log("WebSocket connected");
+        const timestamp = new Date().toLocaleTimeString("en-US", {
+          hour12: false,
+          fractionalSecondDigits: 3,
+        } as any);
+        console.log(`${timestamp} | FRONTEND: WebSocket connected`);
       };
 
       ws.onmessage = (event) => {
         const data = JSON.parse(event.data);
+        const timestamp = new Date().toLocaleTimeString("en-US", {
+          hour12: false,
+          fractionalSecondDigits: 3,
+        } as any);
+        console.log(
+          `${timestamp} | FRONTEND: WebSocket received - ${JSON.stringify(data)}`,
+        );
 
         if (data.type === "initial_state" || data.type === "initial_status") {
           setBulbs(data.data);
+          console.log(
+            `${timestamp} | FRONTEND: Updated bulb states - ${data.data.length} bulbs`,
+          );
         } else if (data.type === "bulb_update") {
           setBulbs((prev) =>
             prev.map((bulb) =>
               bulb.name === data.data.name ? data.data : bulb,
             ),
           );
+          console.log(
+            `${timestamp} | FRONTEND: Updated bulb '${data.data.name}' state`,
+          );
         }
       };
 
       ws.onclose = () => {
         setIsConnected(false);
-        console.log("WebSocket disconnected, retrying...");
+        const timestamp = new Date().toLocaleTimeString("en-US", {
+          hour12: false,
+          fractionalSecondDigits: 3,
+        } as any);
+        console.log(
+          `${timestamp} | FRONTEND: WebSocket disconnected, retrying...`,
+        );
         setTimeout(connectWebSocket, 2000);
       };
 
       ws.onerror = (error) => {
-        console.error("WebSocket error:", error);
+        const timestamp = new Date().toLocaleTimeString("en-US", {
+          hour12: false,
+          fractionalSecondDigits: 3,
+        } as any);
+        console.log(`${timestamp} | FRONTEND: WebSocket error - ${error}`);
       };
 
       wsRef.current = ws;
@@ -180,8 +207,16 @@ export const BulbControls: React.FC<BulbControlsProps> = ({
     }
   }, [selectedTargets, bulbs]);
 
-  // API call helper
+  // API call helper with debug logging
   const sendCommand = async (endpoint: string, command: any) => {
+    const timestamp = new Date().toLocaleTimeString("en-US", {
+      hour12: false,
+      fractionalSecondDigits: 3,
+    });
+    console.log(
+      `${timestamp} | FRONTEND: POST ${endpoint} - ${JSON.stringify(command)}`,
+    );
+
     try {
       const response = await fetch(`${API_BASE}${endpoint}`, {
         method: "POST",
@@ -190,10 +225,18 @@ export const BulbControls: React.FC<BulbControlsProps> = ({
       });
 
       if (!response.ok) {
-        console.error("Command failed:", await response.text());
+        const errorText = await response.text();
+        console.log(
+          `${timestamp} | FRONTEND: Command failed - ${response.status}: ${errorText}`,
+        );
+      } else {
+        const result = await response.json();
+        console.log(
+          `${timestamp} | FRONTEND: Command successful - ${JSON.stringify(result)}`,
+        );
       }
     } catch (error) {
-      console.error("API error:", error);
+      console.log(`${timestamp} | FRONTEND: API error - ${error}`);
     }
   };
 
@@ -302,10 +345,22 @@ export const BulbControls: React.FC<BulbControlsProps> = ({
 
   // Sync request
   const handleSyncRequest = async () => {
+    const timestamp = new Date().toLocaleTimeString("en-US", {
+      hour12: false,
+      fractionalSecondDigits: 3,
+    });
+    console.log(`${timestamp} | FRONTEND: POST /bulbs/sync - force refresh`);
+
     try {
-      await fetch(`${API_BASE}/bulbs/sync`, { method: "POST" });
+      const response = await fetch(`${API_BASE}/bulbs/sync`, {
+        method: "POST",
+      });
+      const result = await response.json();
+      console.log(
+        `${timestamp} | FRONTEND: Sync completed - ${JSON.stringify(result)}`,
+      );
     } catch (error) {
-      console.error("Sync failed:", error);
+      console.log(`${timestamp} | FRONTEND: Sync failed - ${error}`);
     }
   };
 
