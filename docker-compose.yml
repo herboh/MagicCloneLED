@@ -1,12 +1,21 @@
-version: '3.8'
+version: "3.8"
 
 services:
   lights:
     build: .
-    container_name: lights-app
+    container_name: lights-controller
+    ports:
+      - "3000:3000"
+      - "8000:8000"
     restart: unless-stopped
+    volumes:
+      - ./config.json:/app/config.json:ro # Read-only config
+      - ./logs:/app/logs
     networks:
-      - traefik
+      - proxy
+    environment:
+      - NODE_ENV=production
+      - PYTHONUNBUFFERED=1
     labels:
       - "traefik.enable=true"
       - "traefik.http.routers.lights.rule=Host(`lights.chanflix.com`)"
@@ -15,5 +24,5 @@ services:
       - "traefik.http.services.lights.loadbalancer.server.port=3000"
 
 networks:
-  traefik:
+  proxy:
     external: true
