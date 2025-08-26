@@ -23,6 +23,8 @@ MANIFEST
 
 # Next.js
 .next/
+next-env.d.ts
+bun.lock
 out/
 
 # Production
