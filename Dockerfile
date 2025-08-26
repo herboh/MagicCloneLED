@@ -11,7 +11,7 @@ COPY lib/ ./lib/
 COPY pages/ ./pages/
 COPY public/ ./public/
 COPY styles/ ./styles/
-COPY next.config.js postcss.config.js tailwind.config.js tsconfig.json components.json next-env.d.ts ./
+COPY next.config.js postcss.config.js tailwind.config.js tsconfig.json next-env.d.ts ./
 
 RUN bun run build
 
