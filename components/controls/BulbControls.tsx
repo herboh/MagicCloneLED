@@ -163,6 +163,24 @@ export const BulbControls: React.FC<BulbControlsProps> = ({ className = "" }) =>
     }
   };
 
+  // Debounced API call helper
+  const debouncedSendCommand = useCallback(
+    (() => {
+      let timeoutId: NodeJS.Timeout | null = null;
+      
+      return (endpoint: string, command: any) => {
+        if (timeoutId) {
+          clearTimeout(timeoutId);
+        }
+        
+        timeoutId = setTimeout(() => {
+          sendCommand(endpoint, command);
+        }, 200);
+      };
+    })(),
+    []
+  );
+
   // Color change handler
   const handleColorChange = (h: number, s: number, v: number) => {
     setCurrentH(h);
@@ -171,12 +189,12 @@ export const BulbControls: React.FC<BulbControlsProps> = ({ className = "" }) =>
     setIsWarmWhite(false);
     
     if (selectedTargets.length === 1) {
-      sendCommand(`/bulbs/${selectedTargets[0]}/command`, {
+      debouncedSendCommand(`/bulbs/${selectedTargets[0]}/command`, {
         action: "hsv",
         h, s, v
       });
     } else if (selectedTargets.length > 1) {
-      sendCommand("/groups/command", {
+      debouncedSendCommand("/groups/command", {
         targets: selectedTargets,
         action: "hsv",
         h, s, v
@@ -190,12 +208,12 @@ export const BulbControls: React.FC<BulbControlsProps> = ({ className = "" }) =>
     
     if (isWarmWhite) {
       if (selectedTargets.length === 1) {
-        sendCommand(`/bulbs/${selectedTargets[0]}/command`, {
+        debouncedSendCommand(`/bulbs/${selectedTargets[0]}/command`, {
           action: "warm_white",
           brightness: newBrightness
         });
       } else if (selectedTargets.length > 1) {
-        sendCommand("/groups/command", {
+        debouncedSendCommand("/groups/command", {
           targets: selectedTargets,
           action: "warm_white",
           brightness: newBrightness

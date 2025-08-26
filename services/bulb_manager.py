@@ -119,6 +119,14 @@ class BulbManager:
         if name not in self.bulbs or name not in self.controllers:
             return False
 
+        bulb = self.bulbs[name]
+        
+        # Check if a command was sent in the last ~5 seconds, if so ignore poll
+        if bulb.last_command_time:
+            time_since_command = datetime.now() - bulb.last_command_time
+            if time_since_command.total_seconds() < 5:
+                return bulb.online  # Return current online status without polling
+
         controller = self.controllers[name]
         try:
             status = await controller.get_status()
@@ -127,8 +135,6 @@ class BulbManager:
         except Exception:
             # If get_status fails, treat as offline
             status = None
-
-        bulb = self.bulbs[name]
 
         # If no status (e.g., device offline), mark offline and notify
         if not isinstance(status, dict):

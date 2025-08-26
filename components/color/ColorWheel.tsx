@@ -142,7 +142,7 @@ export const ColorWheel: React.FC<ColorWheelProps> = ({
     return [Math.round(hue), Math.round(saturation), Math.round(value)];
   }, []);
 
-  // Draw the HSV color wheel
+  // Draw the static HSV color wheel once on mount
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
@@ -151,9 +151,10 @@ export const ColorWheel: React.FC<ColorWheelProps> = ({
 
     ctx.clearRect(0, 0, wheelSize, wheelSize);
 
-    // Draw HSV color wheel
+    // Draw HSV color wheel with fixed brightness
     const imageData = ctx.createImageData(wheelSize, wheelSize);
     const data = imageData.data;
+    const fixedV = 100; // Use maximum brightness for the static wheel
 
     for (let x = 0; x < wheelSize; x++) {
       for (let y = 0; y < wheelSize; y++) {
@@ -168,8 +169,8 @@ export const ColorWheel: React.FC<ColorWheelProps> = ({
           const saturation =
             ((distance - innerRadius) / (outerRadius - innerRadius)) * 100;
 
-          // Use current V (value) from props for the wheel brightness
-          const [r, g, b] = hsvToRgb(hue, saturation, v);
+          // Use fixed brightness for the static wheel
+          const [r, g, b] = hsvToRgb(hue, saturation, fixedV);
 
           const pixelIndex = (y * wheelSize + x) * 4;
           data[pixelIndex] = r; // R
@@ -194,8 +195,23 @@ export const ColorWheel: React.FC<ColorWheelProps> = ({
     ctx.strokeStyle = "#504945";
     ctx.lineWidth = 5;
     ctx.stroke();
+  }, [hsvToRgb]); // Only run once on mount
 
-    // Draw selection dot
+  // Draw only the selection dot when h, s, or warm white mode changes
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return;
+
+    // Get the current image data to preserve the wheel
+    const imageData = ctx.getImageData(0, 0, wheelSize, wheelSize);
+    
+    // Clear the canvas and restore the wheel
+    ctx.clearRect(0, 0, wheelSize, wheelSize);
+    ctx.putImageData(imageData, 0, 0);
+
+    // Only draw selection dot if not in warm white mode
     if (!isWarmWhite) {
       const angle = (h * Math.PI) / 180;
       const radius = innerRadius + (s / 100) * (outerRadius - innerRadius);
@@ -210,7 +226,7 @@ export const ColorWheel: React.FC<ColorWheelProps> = ({
       ctx.lineWidth = 2;
       ctx.stroke();
     }
-  }, [h, s, v, isWarmWhite, hsvToRgb]);
+  }, [h, s, isWarmWhite]);
 
   // Handle color wheel interaction
   const handleColorSelection = useCallback(
