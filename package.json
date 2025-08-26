@@ -1,6 +1,7 @@
 {
-  "name": "led-controller-frontend",
+  "name": "led-controller",
   "version": "1.0.0",
+  "description": "Web-based controller for MagicHome LED bulbs with real-time HSV color wheel interface",
   "private": true,
   "scripts": {
     "dev": "next dev",
@@ -9,33 +10,20 @@
     "lint": "next lint"
   },
   "dependencies": {
-    "@radix-ui/react-select": "^2.2.6",
-    "@radix-ui/react-slot": "^1.2.3",
-    "@types/node": "^20.0.0",
-    "@types/react": "^18.2.0",
-    "@types/react-dom": "^18.2.0",
-    "class-variance-authority": "^0.7.1",
-    "clsx": "^2.1.1",
-    "color": "^5.0.0",
-    "lucide-react": "^0.541.0",
     "next": "^14.0.0",
-    "radix-ui": "^1.4.3",
     "react": "^18.2.0",
     "react-dom": "^18.2.0",
-    "tailwind-merge": "^3.3.1",
-    "tailwindcss-animate": "^1.0.7",
     "typescript": "^5.0.0"
   },
   "devDependencies": {
-    "@types/color": "^4.2.0",
+    "@types/node": "^20.0.0",
+    "@types/react": "^18.2.0",
+    "@types/react-dom": "^18.2.0",
     "autoprefixer": "^10.4.16",
     "eslint": "^8.0.0",
     "eslint-config-next": "^14.0.0",
     "postcss": "^8.4.31",
     "tailwindcss": "^3.3.5",
     "@types/bun": "latest"
-  },
-  "peerDependencies": {
-    "typescript": "^5"
   }
 }

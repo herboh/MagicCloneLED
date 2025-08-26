@@ -1,0 +1,25 @@
+{
+  "bulbs": {
+    "living_room": "192.168.1.100",
+    "bedroom": "192.168.1.101",
+    "kitchen": "192.168.1.102"
+  },
+  "groups": {
+    "all": ["living_room", "bedroom", "kitchen"],
+    "downstairs": ["living_room", "kitchen"],
+    "upstairs": ["bedroom"]
+  },
+  "colors": {
+    "red": "#FF0000",
+    "green": "#00FF00",
+    "blue": "#0000FF",
+    "purple": "#800080",
+    "orange": "#FFA500",
+    "yellow": "#FFFF00",
+    "cyan": "#00FFFF",
+    "pink": "#FFC0CB",
+    "white": "#FFFFFF",
+    "warmwhite": "WW",
+    "warm": "WW"
+  }
+}
