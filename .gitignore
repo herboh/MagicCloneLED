@@ -104,3 +104,5 @@ CLAUDE.md
 
 # Personal config (users should create their own)
 config.json
+.env.development
+.env.production

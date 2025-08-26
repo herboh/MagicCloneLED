@@ -21,7 +21,8 @@ interface BulbControlsProps {
   className?: string;
 }
 
-const API_BASE = "http://192.168.2.2:8000";
+// Environment-based API configuration
+const API_BASE = import.meta.env.VITE_API_BASE || "/api";
 
 export const BulbControls: React.FC<BulbControlsProps> = ({
   className = "",
@@ -105,7 +106,16 @@ export const BulbControls: React.FC<BulbControlsProps> = ({
   // WebSocket connection
   useEffect(() => {
     const connectWebSocket = () => {
-      const ws = new WebSocket("ws://192.168.2.2:8000/ws");
+      // Environment-based WebSocket URL configuration
+      let wsUrl = import.meta.env.VITE_WS_URL;
+      
+      if (!wsUrl) {
+        // Fallback: auto-detect protocol and use relative path (for container deployment)
+        const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+        wsUrl = `${protocol}//${window.location.host}/ws`;
+      }
+      
+      const ws = new WebSocket(wsUrl);
 
       ws.onopen = () => {
         setIsConnected(true);
