@@ -324,6 +324,20 @@ async def control_group(command: GroupCommand):
                             bulb_name, power_state
                         )
 
+        elif command.action == "toggle":
+            for target in command.targets:
+                if target in bulb_manager.bulbs:
+                    current_state = bulb_manager.get_bulb_state(target)
+                    if current_state:
+                        results[target] = await bulb_manager.set_power(target, not current_state.on)
+                elif target in bulb_manager.groups:
+                    for bulb_name in bulb_manager.groups[target]:
+                        current_state = bulb_manager.get_bulb_state(bulb_name)
+                        if current_state:
+                            results[bulb_name] = await bulb_manager.set_power(
+                                bulb_name, not current_state.on
+                            )
+
         elif command.action == "hsv" and all(
             x is not None for x in [command.h, command.s, command.v]
         ):
