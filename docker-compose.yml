@@ -1,15 +1,31 @@
-version: "3.8"
-
 services:
-  led-controller:
-    build: .
-    container_name: led-controller
+  lights:
+    build:
+      context: .
+      args:
+        - NEXT_PUBLIC_API_URL=http://lights-controller:8000
+    container_name: lights-controller
     ports:
-      - "3000:3000"  # Frontend
-      - "8000:8000"  # Backend API
+      - "3001:3000"
+      - "8008:8000"
     restart: unless-stopped
     volumes:
-      - ./config.json:/app/config.json:ro
+      - ./config.json:/app/config.json:ro # Read-only config
+      - ./logs:/app/logs
+    networks:
+      - proxy
     environment:
       - NODE_ENV=production
       - PYTHONUNBUFFERED=1
+      - NEXT_PUBLIC_API_URL=http://lights-controller:8000
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.lights.rule=Host(`lights.chanflix.com`)"
+      - "traefik.http.routers.lights-secure.rule=Host(`lights.chanflix.com`)"
+      - "traefik.http.routers.lights-secure.entrypoints=https"
+      - "traefik.http.routers.lights-secure.tls=true"
+      - "traefik.http.routers.lights-secure.tls.certresolver=cloudflare"
+      - "traefik.http.services.lights.loadbalancer.server.port=3000"
+networks:
+  proxy:
+    external: true

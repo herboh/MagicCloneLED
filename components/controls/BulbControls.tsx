@@ -21,9 +21,11 @@ interface BulbControlsProps {
   className?: string;
 }
 
-const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+const API_BASE = "/api";
 
-export const BulbControls: React.FC<BulbControlsProps> = ({ className = "" }) => {
+export const BulbControls: React.FC<BulbControlsProps> = ({
+  className = "",
+}) => {
   const [bulbs, setBulbs] = useState<BulbState[]>([]);
   const [groups, setGroups] = useState<{ [key: string]: string[] }>({});
   const [selectedTargets, setSelectedTargets] = useState<string[]>([]);
@@ -40,33 +42,63 @@ export const BulbControls: React.FC<BulbControlsProps> = ({ className = "" }) =>
     const hNorm = h % 360;
     const sNorm = Math.max(0, Math.min(100, s)) / 100;
     const vNorm = Math.max(0, Math.min(100, v)) / 100;
-    
+
     if (sNorm === 0) {
       const gray = Math.round(vNorm * 255);
-      return `#${gray.toString(16).padStart(2, '0').repeat(3)}`.toUpperCase();
+      return `#${gray.toString(16).padStart(2, "0").repeat(3)}`.toUpperCase();
     }
-    
+
     const hSector = hNorm / 60;
     const sector = Math.floor(hSector);
     const f = hSector - sector;
-    
+
     const p = vNorm * (1 - sNorm);
     const q = vNorm * (1 - sNorm * f);
     const t = vNorm * (1 - sNorm * (1 - f));
-    
+
     let r, g, b;
     switch (sector) {
-      case 0: r = vNorm; g = t; b = p; break;
-      case 1: r = q; g = vNorm; b = p; break;
-      case 2: r = p; g = vNorm; b = t; break;
-      case 3: r = p; g = q; b = vNorm; break;
-      case 4: r = t; g = p; b = vNorm; break;
-      default: r = vNorm; g = p; b = q; break;
+      case 0:
+        r = vNorm;
+        g = t;
+        b = p;
+        break;
+      case 1:
+        r = q;
+        g = vNorm;
+        b = p;
+        break;
+      case 2:
+        r = p;
+        g = vNorm;
+        b = t;
+        break;
+      case 3:
+        r = p;
+        g = q;
+        b = vNorm;
+        break;
+      case 4:
+        r = t;
+        g = p;
+        b = vNorm;
+        break;
+      default:
+        r = vNorm;
+        g = p;
+        b = q;
+        break;
     }
-    
-    const rHex = Math.round(r * 255).toString(16).padStart(2, '0');
-    const gHex = Math.round(g * 255).toString(16).padStart(2, '0');
-    const bHex = Math.round(b * 255).toString(16).padStart(2, '0');
+
+    const rHex = Math.round(r * 255)
+      .toString(16)
+      .padStart(2, "0");
+    const gHex = Math.round(g * 255)
+      .toString(16)
+      .padStart(2, "0");
+    const bHex = Math.round(b * 255)
+      .toString(16)
+      .padStart(2, "0");
     return `#${rHex}${gHex}${bHex}`.toUpperCase();
   }, []);
 
@@ -74,39 +106,41 @@ export const BulbControls: React.FC<BulbControlsProps> = ({ className = "" }) =>
   useEffect(() => {
     const connectWebSocket = () => {
       const ws = new WebSocket(`${API_BASE.replace("http", "ws")}/ws`);
-      
+
       ws.onopen = () => {
         setIsConnected(true);
         console.log("WebSocket connected");
       };
-      
+
       ws.onmessage = (event) => {
         const data = JSON.parse(event.data);
-        
+
         if (data.type === "initial_state" || data.type === "initial_status") {
           setBulbs(data.data);
         } else if (data.type === "bulb_update") {
-          setBulbs(prev => prev.map(bulb => 
-            bulb.name === data.data.name ? data.data : bulb
-          ));
+          setBulbs((prev) =>
+            prev.map((bulb) =>
+              bulb.name === data.data.name ? data.data : bulb,
+            ),
+          );
         }
       };
-      
+
       ws.onclose = () => {
         setIsConnected(false);
         console.log("WebSocket disconnected, retrying...");
         setTimeout(connectWebSocket, 2000);
       };
-      
+
       ws.onerror = (error) => {
         console.error("WebSocket error:", error);
       };
-      
+
       wsRef.current = ws;
     };
 
     connectWebSocket();
-    
+
     return () => {
       if (wsRef.current) {
         wsRef.current.close();
@@ -132,7 +166,7 @@ export const BulbControls: React.FC<BulbControlsProps> = ({ className = "" }) =>
   // Update current color when selection changes
   useEffect(() => {
     if (selectedTargets.length === 1) {
-      const bulb = bulbs.find(b => b.name === selectedTargets[0]);
+      const bulb = bulbs.find((b) => b.name === selectedTargets[0]);
       if (bulb) {
         setCurrentH(bulb.h);
         setCurrentS(bulb.s);
@@ -154,7 +188,7 @@ export const BulbControls: React.FC<BulbControlsProps> = ({ className = "" }) =>
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(command),
       });
-      
+
       if (!response.ok) {
         console.error("Command failed:", await response.text());
       }
@@ -167,18 +201,18 @@ export const BulbControls: React.FC<BulbControlsProps> = ({ className = "" }) =>
   const debouncedSendCommand = useCallback(
     (() => {
       let timeoutId: NodeJS.Timeout | null = null;
-      
+
       return (endpoint: string, command: any) => {
         if (timeoutId) {
           clearTimeout(timeoutId);
         }
-        
+
         timeoutId = setTimeout(() => {
           sendCommand(endpoint, command);
         }, 200);
       };
     })(),
-    []
+    [],
   );
 
   // Color change handler
@@ -187,17 +221,21 @@ export const BulbControls: React.FC<BulbControlsProps> = ({ className = "" }) =>
     setCurrentS(s);
     setCurrentV(v);
     setIsWarmWhite(false);
-    
+
     if (selectedTargets.length === 1) {
       debouncedSendCommand(`/bulbs/${selectedTargets[0]}/command`, {
         action: "hsv",
-        h, s, v
+        h,
+        s,
+        v,
       });
     } else if (selectedTargets.length > 1) {
       debouncedSendCommand("/groups/command", {
         targets: selectedTargets,
         action: "hsv",
-        h, s, v
+        h,
+        s,
+        v,
       });
     }
   };
@@ -205,18 +243,18 @@ export const BulbControls: React.FC<BulbControlsProps> = ({ className = "" }) =>
   // Brightness change handler
   const handleBrightnessChange = (newBrightness: number) => {
     setBrightness(newBrightness);
-    
+
     if (isWarmWhite) {
       if (selectedTargets.length === 1) {
         debouncedSendCommand(`/bulbs/${selectedTargets[0]}/command`, {
           action: "warm_white",
-          brightness: newBrightness
+          brightness: newBrightness,
         });
       } else if (selectedTargets.length > 1) {
         debouncedSendCommand("/groups/command", {
           targets: selectedTargets,
           action: "warm_white",
-          brightness: newBrightness
+          brightness: newBrightness,
         });
       }
     } else {
@@ -231,18 +269,18 @@ export const BulbControls: React.FC<BulbControlsProps> = ({ className = "" }) =>
   const handleWarmWhiteToggle = () => {
     const newWarmWhite = !isWarmWhite;
     setIsWarmWhite(newWarmWhite);
-    
+
     if (newWarmWhite) {
       if (selectedTargets.length === 1) {
         sendCommand(`/bulbs/${selectedTargets[0]}/command`, {
           action: "warm_white",
-          brightness: brightness
+          brightness: brightness,
         });
       } else if (selectedTargets.length > 1) {
         sendCommand("/groups/command", {
           targets: selectedTargets,
           action: "warm_white",
-          brightness: brightness
+          brightness: brightness,
         });
       }
     } else {
@@ -257,7 +295,7 @@ export const BulbControls: React.FC<BulbControlsProps> = ({ className = "" }) =>
     } else if (selectedTargets.length > 1) {
       sendCommand("/groups/command", {
         targets: selectedTargets,
-        action: "toggle"
+        action: "toggle",
       });
     }
   };
@@ -273,10 +311,10 @@ export const BulbControls: React.FC<BulbControlsProps> = ({ className = "" }) =>
 
   // Toggle target selection
   const toggleTarget = (target: string) => {
-    setSelectedTargets(prev => 
-      prev.includes(target) 
-        ? prev.filter(t => t !== target)
-        : [...prev, target]
+    setSelectedTargets((prev) =>
+      prev.includes(target)
+        ? prev.filter((t) => t !== target)
+        : [...prev, target],
     );
   };
 
@@ -298,11 +336,14 @@ export const BulbControls: React.FC<BulbControlsProps> = ({ className = "" }) =>
           LED Controller
         </h1>
         <div className="flex items-center gap-4">
-          <div className={`text-sm px-3 py-1 rounded-full ${isConnected ? "bg-green-600" : "bg-red-600"}`}>
+          <div
+            className={`text-sm px-3 py-1 rounded-full ${isConnected ? "bg-green-600" : "bg-red-600"}`}
+          >
             {connectionStatus}
           </div>
           <div className="text-sm" style={{ color: "#a89984" }}>
-            {selectedTargets.length} target{selectedTargets.length !== 1 ? "s" : ""} selected
+            {selectedTargets.length} target
+            {selectedTargets.length !== 1 ? "s" : ""} selected
           </div>
         </div>
       </div>
@@ -327,20 +368,24 @@ export const BulbControls: React.FC<BulbControlsProps> = ({ className = "" }) =>
         {/* Right Column - Bulb & Group Selection */}
         <div className="space-y-6">
           {/* Quick Groups */}
-          <div 
+          <div
             className="backdrop-blur-xl border rounded-3xl p-6"
             style={{ backgroundColor: "#32302f", borderColor: "#504945" }}
           >
-            <h3 className="text-lg font-semibold mb-4" style={{ color: "#8ec07c" }}>
+            <h3
+              className="text-lg font-semibold mb-4"
+              style={{ color: "#8ec07c" }}
+            >
               Groups
             </h3>
             <div className="grid grid-cols-2 gap-2">
-              {Object.keys(groups).map(groupName => (
+              {Object.keys(groups).map((groupName) => (
                 <button
                   key={groupName}
                   onClick={() => selectGroup(groupName)}
                   className={`p-3 rounded-xl border transition-all duration-200 hover:scale-105 ${
-                    JSON.stringify(selectedTargets.sort()) === JSON.stringify(groups[groupName].sort())
+                    JSON.stringify(selectedTargets.sort()) ===
+                    JSON.stringify(groups[groupName].sort())
                       ? "border-[#8ec07c] bg-[#8ec07c]/20"
                       : "border-[#504945] bg-[#3c3836]"
                   }`}
@@ -348,7 +393,8 @@ export const BulbControls: React.FC<BulbControlsProps> = ({ className = "" }) =>
                 >
                   {groupName}
                   <div className="text-xs mt-1" style={{ color: "#a89984" }}>
-                    {groups[groupName].length} bulb{groups[groupName].length !== 1 ? "s" : ""}
+                    {groups[groupName].length} bulb
+                    {groups[groupName].length !== 1 ? "s" : ""}
                   </div>
                 </button>
               ))}
@@ -356,15 +402,18 @@ export const BulbControls: React.FC<BulbControlsProps> = ({ className = "" }) =>
           </div>
 
           {/* Individual Bulbs */}
-          <div 
+          <div
             className="backdrop-blur-xl border rounded-3xl p-6"
             style={{ backgroundColor: "#32302f", borderColor: "#504945" }}
           >
-            <h3 className="text-lg font-semibold mb-4" style={{ color: "#8ec07c" }}>
+            <h3
+              className="text-lg font-semibold mb-4"
+              style={{ color: "#8ec07c" }}
+            >
               Bulbs
             </h3>
             <div className="space-y-2">
-              {bulbs.map(bulb => (
+              {bulbs.map((bulb) => (
                 <button
                   key={bulb.name}
                   onClick={() => toggleTarget(bulb.name)}
@@ -377,17 +426,33 @@ export const BulbControls: React.FC<BulbControlsProps> = ({ className = "" }) =>
                 >
                   <div className="flex items-center justify-between">
                     <div className="flex items-center gap-3">
-                      <div 
+                      <div
                         className="w-4 h-4 rounded-full border-2"
                         style={{
-                          backgroundColor: bulb.online && bulb.on ? (bulb.is_warm_white ? "#FFF8DC" : bulb.hex) : "#3c3836",
-                          borderColor: bulb.online ? (bulb.on ? "#8ec07c" : "#a89984") : "#fb4934"
+                          backgroundColor:
+                            bulb.online && bulb.on
+                              ? bulb.is_warm_white
+                                ? "#FFF8DC"
+                                : bulb.hex
+                              : "#3c3836",
+                          borderColor: bulb.online
+                            ? bulb.on
+                              ? "#8ec07c"
+                              : "#a89984"
+                            : "#fb4934",
                         }}
                       />
                       <span className="font-medium">{bulb.name}</span>
                     </div>
-                    <div className="text-right text-xs" style={{ color: "#a89984" }}>
-                      {bulb.online ? (bulb.on ? `${bulb.brightness}%` : "OFF") : "OFFLINE"}
+                    <div
+                      className="text-right text-xs"
+                      style={{ color: "#a89984" }}
+                    >
+                      {bulb.online
+                        ? bulb.on
+                          ? `${bulb.brightness}%`
+                          : "OFF"
+                        : "OFFLINE"}
                     </div>
                   </div>
                 </button>

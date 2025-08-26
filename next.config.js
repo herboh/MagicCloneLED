@@ -3,12 +3,17 @@ const nextConfig = {
   reactStrictMode: true,
   swcMinify: true,
   async rewrites() {
-    return [
-      {
-        source: "/api/:path*",
-        destination: `${process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000"}/:path*`,
-      },
-    ];
+    // Only apply a rewrite if targeting an absolute API URL
+    const api = process.env.NEXT_PUBLIC_API_URL;
+    if (api && api.startsWith("http")) {
+      return [
+        {
+          source: "/api/:path*",
+          destination: `${api}/:path*`,
+        },
+      ];
+    }
+    return [];
   },
 };
 
