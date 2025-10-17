@@ -5,7 +5,7 @@ WORKDIR /app
 
 # Copy package files
 COPY package.json bun.lock ./
-RUN bun install --frozen-lockfile --production=false
+RUN bun install --frozen-lockfile
 
 # Copy source files needed for Vite build
 COPY src/ ./src/
@@ -42,7 +42,12 @@ RUN echo 'server {\n\
     location / {\n\
         root /usr/share/nginx/html;\n\
         try_files $uri $uri/ /index.html;\n\
-        add_header Cache-Control "public, max-age=31536000" always;\n\
+    }\n\
+    \n\
+    # Cache static assets (JS, CSS, images) but not HTML\n\
+    location ~* \.(js|css|png|jpg|jpeg|gif|ico|svg|woff|woff2|ttf|eot)$ {\n\
+        root /usr/share/nginx/html;\n\
+        add_header Cache-Control "public, max-age=31536000, immutable";\n\
     }\n\
     \n\
     # Proxy API calls to Python backend\n\
@@ -70,7 +75,6 @@ RUN echo 'server {\n\
 # Configure supervisor to manage both processes
 RUN echo '[supervisord]\n\
 nodaemon=true\n\
-user=root\n\
 \n\
 [program:fastapi]\n\
 command=python3 -m uvicorn backend.main:app --host 127.0.0.1 --port 8000\n\
