@@ -40,6 +40,7 @@ export const BulbControls: React.FC<BulbControlsProps> = ({
   const wsRef = useRef<WebSocket | null>(null);
   const reconnectTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const isUnmountingRef = useRef(false);
+  const lastLocalInteractionRef = useRef(0);
 
   // Helper function for consistent timestamps
   const getTimestamp = () => {
@@ -141,11 +142,17 @@ export const BulbControls: React.FC<BulbControlsProps> = ({
     if (selectedTargets.length === 1) {
       const bulb = bulbs.find((b) => b.name === selectedTargets[0]);
       if (bulb) {
-        setCurrentH(bulb.h);
-        setCurrentS(bulb.s);
-        setCurrentV(bulb.v);
-        setBrightness(bulb.brightness);
-        setIsWarmWhite(bulb.is_warm_white);
+        // Avoid stale WebSocket updates clobbering fast local interactions.
+        if (Date.now() - lastLocalInteractionRef.current < 500) {
+          return;
+        }
+        setCurrentH((prev) => (Math.abs(prev - bulb.h) > 0.1 ? bulb.h : prev));
+        setCurrentS((prev) => (Math.abs(prev - bulb.s) > 0.1 ? bulb.s : prev));
+        setCurrentV((prev) => (Math.abs(prev - bulb.v) > 0.1 ? bulb.v : prev));
+        setBrightness((prev) =>
+          Math.abs(prev - bulb.brightness) > 0.1 ? bulb.brightness : prev,
+        );
+        setIsWarmWhite((prev) => (prev !== bulb.is_warm_white ? bulb.is_warm_white : prev));
       }
     } else if (selectedTargets.length === 0 && bulbs.length > 0) {
       // Auto-select first bulb
@@ -186,16 +193,32 @@ export const BulbControls: React.FC<BulbControlsProps> = ({
   // Debounced API call helper
   const debouncedSendCommand = useCallback(
     (() => {
-      let timeoutId: NodeJS.Timeout | null = null;
+      const timeoutByEndpoint = new Map<string, ReturnType<typeof setTimeout>>();
+      const lastQueuedByEndpoint = new Map<string, string>();
+      const lastSentByEndpoint = new Map<string, string>();
 
       return (endpoint: string, command: any) => {
-        if (timeoutId) {
-          clearTimeout(timeoutId);
+        const commandJson = JSON.stringify(command);
+        lastQueuedByEndpoint.set(endpoint, commandJson);
+
+        const existingTimeout = timeoutByEndpoint.get(endpoint);
+        if (existingTimeout) {
+          clearTimeout(existingTimeout);
         }
 
-        timeoutId = setTimeout(() => {
-          sendCommand(endpoint, command);
-        }, 200);
+        const timeoutId = setTimeout(() => {
+          timeoutByEndpoint.delete(endpoint);
+          const latestJson = lastQueuedByEndpoint.get(endpoint);
+          if (!latestJson) {
+            return;
+          }
+          if (lastSentByEndpoint.get(endpoint) === latestJson) {
+            return;
+          }
+          lastSentByEndpoint.set(endpoint, latestJson);
+          sendCommand(endpoint, JSON.parse(latestJson));
+        }, 120);
+        timeoutByEndpoint.set(endpoint, timeoutId);
       };
     })(),
     [],
@@ -203,9 +226,11 @@ export const BulbControls: React.FC<BulbControlsProps> = ({
 
   // Color change handler
   const handleColorChange = (h: number, s: number, v: number) => {
+    lastLocalInteractionRef.current = Date.now();
     setCurrentH(h);
     setCurrentS(s);
     setCurrentV(v);
+    setBrightness(v);
     setIsWarmWhite(false);
 
     if (selectedTargets.length === 1) {
@@ -228,6 +253,7 @@ export const BulbControls: React.FC<BulbControlsProps> = ({
 
   // Brightness change handler
   const handleBrightnessChange = (newBrightness: number) => {
+    lastLocalInteractionRef.current = Date.now();
     setBrightness(newBrightness);
 
     if (isWarmWhite) {
@@ -244,10 +270,27 @@ export const BulbControls: React.FC<BulbControlsProps> = ({
         });
       }
     } else {
-      // For RGB mode, adjust the V component and sync it
+      // For RGB mode, only adjust V and dispatch directly to avoid stale H/S reuse.
       const newV = newBrightness;
       setCurrentV(newV);
-      handleColorChange(currentH, currentS, newV);
+      setIsWarmWhite(false);
+
+      if (selectedTargets.length === 1) {
+        debouncedSendCommand(`/bulbs/${selectedTargets[0]}/command`, {
+          action: "hsv",
+          h: currentH,
+          s: currentS,
+          v: newV,
+        });
+      } else if (selectedTargets.length > 1) {
+        debouncedSendCommand("/groups/command", {
+          targets: selectedTargets,
+          action: "hsv",
+          h: currentH,
+          s: currentS,
+          v: newV,
+        });
+      }
     }
   };
 

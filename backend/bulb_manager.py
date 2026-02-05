@@ -56,8 +56,8 @@ class BulbState:
 
 class BulbManager:
     """Manages bulb states and communications"""
-    MIN_COMMAND_INTERVAL_SECONDS = 0.25
-    GROUP_COMMAND_SPACING_SECONDS = 0.05
+    MIN_COMMAND_INTERVAL_SECONDS = 0.12
+    GROUP_COMMAND_SPACING_SECONDS = 0.02
 
     def __init__(self, config_path: str = "../config.json"):
         self.bulbs: Dict[str, BulbState] = {}

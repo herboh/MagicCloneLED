@@ -137,7 +137,7 @@ websocket_manager = ConnectionManager()
 
 # Rate limiting with simple request debouncing
 request_cache = {}
-DEBOUNCE_MS = 200
+DEBOUNCE_MS = 120
 
 
 def should_process_request(bulb_name: str, action: str) -> bool:
@@ -310,14 +310,19 @@ async def control_group(command: GroupCommand):
         targets = bulb_manager.resolve_targets(command.targets)
         if not targets:
             raise HTTPException(status_code=400, detail="No valid bulbs in targets")
+        active_targets = [
+            target for target in targets if should_process_request(target, command.action)
+        ]
+        if not active_targets:
+            return {"message": "Request debounced", "targets": targets}
 
         if command.action in ["on", "off"]:
             power_state = command.action == "on"
-            for target in targets:
+            for target in active_targets:
                 results[target] = await bulb_manager.set_power(target, power_state)
 
         elif command.action == "toggle":
-            for target in targets:
+            for target in active_targets:
                 current_state = bulb_manager.get_bulb_state(target)
                 if current_state:
                     results[target] = await bulb_manager.set_power(
@@ -327,14 +332,16 @@ async def control_group(command: GroupCommand):
         elif command.action == "hsv" and all(
             x is not None for x in [command.h, command.s, command.v]
         ):
-            results = await bulb_manager.set_group_hsv(targets, command.h, command.s, command.v)
+            results = await bulb_manager.set_group_hsv(
+                active_targets, command.h, command.s, command.v
+            )
 
         elif command.action == "color" and command.hex:
             h, s, v = hex_to_hsv(command.hex)
-            results = await bulb_manager.set_group_hsv(targets, h, s, v)
+            results = await bulb_manager.set_group_hsv(active_targets, h, s, v)
 
         elif command.action == "warm_white" and command.brightness:
-            for target in targets:
+            for target in active_targets:
                 results[target] = await bulb_manager.set_warm_white(
                     target, command.brightness
                 )
