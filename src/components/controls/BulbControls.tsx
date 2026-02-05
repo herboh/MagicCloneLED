@@ -103,43 +103,43 @@ export const BulbControls: React.FC<BulbControlsProps> = ({
     return `#${rHex}${gHex}${bHex}`.toUpperCase();
   }, []);
 
+  // Helper function for consistent timestamps
+  const getTimestamp = () => {
+    const now = new Date();
+    const ms = now.getMilliseconds().toString().padStart(3, '0');
+    const time = now.toLocaleTimeString("en-US", { hour12: false });
+    return `${time}.${ms}`;
+  };
+
   // WebSocket connection
   useEffect(() => {
     const connectWebSocket = () => {
       // Environment-based WebSocket URL configuration
       let wsUrl = import.meta.env.VITE_WS_URL;
-      
+
       if (!wsUrl) {
         // Fallback: auto-detect protocol and use relative path (for container deployment)
         const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
         wsUrl = `${protocol}//${window.location.host}/ws`;
       }
-      
+
       const ws = new WebSocket(wsUrl);
 
       ws.onopen = () => {
         setIsConnected(true);
-        const timestamp = new Date().toLocaleTimeString("en-US", {
-          hour12: false,
-          fractionalSecondDigits: 3,
-        } as any);
-        console.log(`${timestamp} | FRONTEND: WebSocket connected`);
+        console.log(`${getTimestamp()} | FRONTEND: WebSocket connected`);
       };
 
       ws.onmessage = (event) => {
         const data = JSON.parse(event.data);
-        const timestamp = new Date().toLocaleTimeString("en-US", {
-          hour12: false,
-          fractionalSecondDigits: 3,
-        } as any);
         console.log(
-          `${timestamp} | FRONTEND: WebSocket received - ${JSON.stringify(data)}`,
+          `${getTimestamp()} | FRONTEND: WebSocket received - ${JSON.stringify(data)}`,
         );
 
         if (data.type === "initial_state" || data.type === "initial_status") {
           setBulbs(data.data);
           console.log(
-            `${timestamp} | FRONTEND: Updated bulb states - ${data.data.length} bulbs`,
+            `${getTimestamp()} | FRONTEND: Updated bulb states - ${data.data.length} bulbs`,
           );
         } else if (data.type === "bulb_update") {
           setBulbs((prev) =>
@@ -148,29 +148,21 @@ export const BulbControls: React.FC<BulbControlsProps> = ({
             ),
           );
           console.log(
-            `${timestamp} | FRONTEND: Updated bulb '${data.data.name}' state`,
+            `${getTimestamp()} | FRONTEND: Updated bulb '${data.data.name}' state`,
           );
         }
       };
 
       ws.onclose = () => {
         setIsConnected(false);
-        const timestamp = new Date().toLocaleTimeString("en-US", {
-          hour12: false,
-          fractionalSecondDigits: 3,
-        } as any);
         console.log(
-          `${timestamp} | FRONTEND: WebSocket disconnected, retrying...`,
+          `${getTimestamp()} | FRONTEND: WebSocket disconnected, retrying...`,
         );
         setTimeout(connectWebSocket, 2000);
       };
 
       ws.onerror = (error) => {
-        const timestamp = new Date().toLocaleTimeString("en-US", {
-          hour12: false,
-          fractionalSecondDigits: 3,
-        } as any);
-        console.log(`${timestamp} | FRONTEND: WebSocket error - ${error}`);
+        console.log(`${getTimestamp()} | FRONTEND: WebSocket error - ${error}`);
       };
 
       wsRef.current = ws;
@@ -219,10 +211,7 @@ export const BulbControls: React.FC<BulbControlsProps> = ({
 
   // API call helper with debug logging
   const sendCommand = async (endpoint: string, command: any) => {
-    const timestamp = new Date().toLocaleTimeString("en-US", {
-      hour12: false,
-      fractionalSecondDigits: 3,
-    } as any);
+    const timestamp = getTimestamp();
     console.log(
       `${timestamp} | FRONTEND: POST ${endpoint} - ${JSON.stringify(command)}`,
     );
@@ -355,10 +344,7 @@ export const BulbControls: React.FC<BulbControlsProps> = ({
 
   // Sync request
   const handleSyncRequest = async () => {
-    const timestamp = new Date().toLocaleTimeString("en-US", {
-      hour12: false,
-      fractionalSecondDigits: 3,
-    } as any);
+    const timestamp = getTimestamp();
     console.log(`${timestamp} | FRONTEND: POST /bulbs/sync - force refresh`);
 
     try {

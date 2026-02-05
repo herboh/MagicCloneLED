@@ -9,13 +9,13 @@ import asyncio
 import json
 import logging
 import sys
+import time
 from contextlib import asynccontextmanager
 from datetime import datetime
 from typing import List, Optional
 
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.middleware.trustedhost import TrustedHostMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 import uvicorn
@@ -118,19 +118,19 @@ class ConnectionManager:
     async def broadcast(self, message: dict):
         if len(self.active_connections) > 0:
             debug_log(f"WEBSOCKET: Broadcasting to {len(self.active_connections)} clients: {message}")
-        
+
         dead_connections = []
         for connection in self.active_connections:
             try:
                 await connection.send_json(message)
-            except:
+            except (WebSocketDisconnect, RuntimeError, Exception):
                 dead_connections.append(connection)
 
         for dead_conn in dead_connections:
             self.disconnect(dead_conn)
 
 
-# Global instances - Fixed type annotation
+# Global instances
 bulb_manager: Optional[BulbManager] = None
 websocket_manager = ConnectionManager()
 
@@ -142,8 +142,6 @@ DEBOUNCE_MS = 100
 
 def should_process_request(bulb_name: str, action: str) -> bool:
     """Simple debouncing to prevent request flooding"""
-    import time
-
     key = f"{bulb_name}:{action}"
     now = time.time() * 1000
 
@@ -196,8 +194,7 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-# Security middleware
-app.add_middleware(TrustedHostMiddleware, allowed_hosts=["*"])
+# CORS middleware for local network access
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -270,11 +267,7 @@ async def control_bulb(bulb_name: str, command: ColorCommand):
         elif command.action == "hsv" and all(
             x is not None for x in [command.h, command.s, command.v]
         ):
-            # Type guard ensures these are not None at this point
-            h = command.h if command.h is not None else 0
-            s = command.s if command.s is not None else 0
-            v = command.v if command.v is not None else 0
-            success = await bulb_manager.set_hsv(bulb_name, h, s, v)
+            success = await bulb_manager.set_hsv(bulb_name, command.h, command.s, command.v)
 
         elif command.action == "color" and command.hex:
             h, s, v = hex_to_hsv(command.hex)
@@ -341,11 +334,7 @@ async def control_group(command: GroupCommand):
         elif command.action == "hsv" and all(
             x is not None for x in [command.h, command.s, command.v]
         ):
-            # Type guard ensures these are not None at this point
-            h = command.h if command.h is not None else 0
-            s = command.s if command.s is not None else 0
-            v = command.v if command.v is not None else 0
-            results = await bulb_manager.set_group_hsv(command.targets, h, s, v)
+            results = await bulb_manager.set_group_hsv(command.targets, command.h, command.s, command.v)
 
         elif command.action == "color" and command.hex:
             h, s, v = hex_to_hsv(command.hex)

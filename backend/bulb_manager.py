@@ -30,7 +30,7 @@ class BulbState:
     v: float = 0.0  # HSV value 0-100
     last_updated: Optional[datetime] = None
     last_command_time: Optional[datetime] = None
-    poll_interval: int = 60  # initial exponential chill
+    poll_interval: int = 60  # Initial polling interval in seconds
     consecutive_failures: int = 0
 
     def to_dict(self) -> dict:
@@ -81,7 +81,9 @@ class BulbManager:
             self.groups = config.get("groups", {})
 
         except FileNotFoundError:
-            print(f"Config file {config_path} not found")
+            print(f"ERROR: Config file {config_path} not found - bulb manager will have no bulbs")
+        except json.JSONDecodeError as e:
+            print(f"ERROR: Invalid JSON in config file {config_path}: {e}")
 
     def _setup_controllers(self):
         """Create LED controllers for each bulb"""
