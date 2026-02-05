@@ -4,10 +4,13 @@ Pure TCP communication with minimal complexity
 """
 
 import asyncio
+import os
 from typing import Optional, Dict
 
 # Debug logging function - will be overridden by main.py
 debug_log_func = None
+COMMAND_COOLDOWN_MS = int(os.getenv("LED_COMMAND_COOLDOWN_MS", "0"))
+COMMAND_COOLDOWN_SECONDS = max(0.0, COMMAND_COOLDOWN_MS / 1000.0)
 
 def debug_log(msg: str):
     if debug_log_func:
@@ -39,6 +42,8 @@ class LEDController:
                 finally:
                     writer.close()
                     await writer.wait_closed()
+                if COMMAND_COOLDOWN_SECONDS > 0:
+                    await asyncio.sleep(COMMAND_COOLDOWN_SECONDS)
                 debug_log(f"BULB {self.ip}: Command sent successfully")
                 return True
             except Exception as e:

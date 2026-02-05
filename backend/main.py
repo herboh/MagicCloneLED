@@ -84,7 +84,7 @@ class ColorCommand(BaseModel):
     v: Optional[float] = Field(None, ge=0, le=100, description="HSV Value 0-100")
     hex: Optional[str] = Field(None, description="Hex color code")
     brightness: Optional[int] = Field(
-        None, ge=1, le=100, description="Warm white brightness 1-100"
+        None, ge=0, le=100, description="Warm white brightness 0-100"
     )
 
 
@@ -95,7 +95,7 @@ class GroupCommand(BaseModel):
     s: Optional[float] = Field(None, ge=0, le=100)
     v: Optional[float] = Field(None, ge=0, le=100)
     hex: Optional[str] = None
-    brightness: Optional[int] = Field(None, ge=1, le=100)
+    brightness: Optional[int] = Field(None, ge=0, le=100)
 
 
 # WebSocket Connection Manager
@@ -287,7 +287,7 @@ async def control_bulb(bulb_name: str, command: ColorCommand):
             h, s, v = hex_to_hsv(command.hex)
             success = await bulb_manager.set_hsv(bulb_name, h, s, v)
 
-        elif command.action == "warm_white" and command.brightness:
+        elif command.action == "warm_white" and command.brightness is not None:
             success = await bulb_manager.set_warm_white(bulb_name, command.brightness)
 
         else:
@@ -354,7 +354,7 @@ async def control_group(command: GroupCommand):
             h, s, v = hex_to_hsv(command.hex)
             results = await bulb_manager.set_group_hsv(active_targets, h, s, v)
 
-        elif command.action == "warm_white" and command.brightness:
+        elif command.action == "warm_white" and command.brightness is not None:
             for target in active_targets:
                 results[target] = await bulb_manager.set_warm_white(
                     target, command.brightness

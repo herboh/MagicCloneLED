@@ -32,7 +32,7 @@ export const BrightnessSlider: React.FC<BrightnessSliderProps> = ({
       <div className="relative">
         <input
           type="range"
-          min="1"
+          min="0"
           max="100"
           value={brightness}
           onChange={handleChange}
@@ -42,32 +42,6 @@ export const BrightnessSlider: React.FC<BrightnessSliderProps> = ({
           }}
         />
       </div>
-
-      <style jsx>{`
-        .brightness-slider {
-          -webkit-appearance: none;
-          appearance: none;
-        }
-        .brightness-slider::-webkit-slider-thumb {
-          -webkit-appearance: none;
-          appearance: none;
-          height: 20px;
-          width: 20px;
-          border-radius: 50%;
-          background: #ffffff;
-          cursor: pointer;
-          box-shadow: 0 0 10px rgba(0, 0, 0, 0.5);
-        }
-        .brightness-slider::-moz-range-thumb {
-          height: 20px;
-          width: 20px;
-          border-radius: 50%;
-          background: #ffffff;
-          cursor: pointer;
-          border: none;
-          box-shadow: 0 0 10px rgba(0, 0, 0, 0.5);
-        }
-      `}</style>
     </div>
   );
 };
