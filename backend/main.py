@@ -158,6 +158,11 @@ def should_process_request(bulb_name: str, action: str) -> bool:
         if now - request_cache[key] < debounce_ms:
             return False
 
+    # Keep cache bounded over long-running uptime.
+    stale = [cache_key for cache_key, ts in request_cache.items() if now - ts > 5000]
+    for cache_key in stale:
+        del request_cache[cache_key]
+
     request_cache[key] = now
     return True
 

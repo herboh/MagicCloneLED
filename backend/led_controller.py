@@ -23,23 +23,27 @@ class LEDController:
     def __init__(self, ip: str, port: int = 5577):
         self.ip = ip
         self.port = port
+        self._lock = asyncio.Lock()
 
     async def _send_command(self, data: list[int]) -> bool:
         """Send raw command bytes to bulb"""
         debug_log(f"BULB {self.ip}: Sending command bytes: {data}")
-        try:
-            reader, writer = await asyncio.wait_for(
-                asyncio.open_connection(self.ip, self.port), timeout=3.0
-            )
-            writer.write(bytes(data))
-            await writer.drain()
-            writer.close()
-            await writer.wait_closed()
-            debug_log(f"BULB {self.ip}: Command sent successfully")
-            return True
-        except Exception as e:
-            debug_log(f"BULB {self.ip}: Command failed: {e}")
-            return False
+        async with self._lock:
+            try:
+                reader, writer = await asyncio.wait_for(
+                    asyncio.open_connection(self.ip, self.port), timeout=3.0
+                )
+                try:
+                    writer.write(bytes(data))
+                    await writer.drain()
+                finally:
+                    writer.close()
+                    await writer.wait_closed()
+                debug_log(f"BULB {self.ip}: Command sent successfully")
+                return True
+            except Exception as e:
+                debug_log(f"BULB {self.ip}: Command failed: {e}")
+                return False
 
     def _checksum(self, data: list[int]) -> int:
         """Calculate simple checksum"""
@@ -76,38 +80,39 @@ class LEDController:
     async def get_status(self) -> Optional[Dict]:
         """Query current bulb status"""
         debug_log(f"BULB {self.ip}: Requesting status")
-        try:
-            reader, writer = await asyncio.wait_for(
-                asyncio.open_connection(self.ip, self.port), timeout=3.0
-            )
+        async with self._lock:
+            try:
+                reader, writer = await asyncio.wait_for(
+                    asyncio.open_connection(self.ip, self.port), timeout=3.0
+                )
 
-            # Status query
-            query = [0x81, 0x8A, 0x8B, 0x96]
-            debug_log(f"BULB {self.ip}: Sending status query: {query}")
-            writer.write(bytes(query))
-            await writer.drain()
+                try:
+                    # Status query
+                    query = [0x81, 0x8A, 0x8B, 0x96]
+                    debug_log(f"BULB {self.ip}: Sending status query: {query}")
+                    writer.write(bytes(query))
+                    await writer.drain()
 
-            # Read response
-            response = await asyncio.wait_for(reader.read(1024), timeout=2.0)
-            writer.close()
-            await writer.wait_closed()
+                    # Read response
+                    response = await asyncio.wait_for(reader.read(1024), timeout=2.0)
+                finally:
+                    writer.close()
+                    await writer.wait_closed()
 
-            if len(response) >= 14:
-                status = {
-                    "online": True,
-                    "on": response[2] == 0x23,
-                    "r": response[6],
-                    "g": response[7],
-                    "b": response[8],
-                    "warm_white": response[9],
-                }
-                debug_log(f"BULB {self.ip}: Status response: {status} (raw bytes: {list(response[:14])})")
-                return status
-        except Exception as e:
-            debug_log(f"BULB {self.ip}: Status query failed: {e}")
-            pass
+                if len(response) >= 14:
+                    status = {
+                        "online": True,
+                        "on": response[2] == 0x23,
+                        "r": response[6],
+                        "g": response[7],
+                        "b": response[8],
+                        "warm_white": response[9],
+                    }
+                    debug_log(f"BULB {self.ip}: Status response: {status} (raw bytes: {list(response[:14])})")
+                    return status
+            except Exception as e:
+                debug_log(f"BULB {self.ip}: Status query failed: {e}")
 
         offline_status = {"online": False, "on": False, "r": 0, "g": 0, "b": 0, "warm_white": 0}
         debug_log(f"BULB {self.ip}: Returning offline status: {offline_status}")
         return offline_status
-
