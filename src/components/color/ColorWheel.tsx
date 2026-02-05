@@ -1,6 +1,7 @@
 import React, { useRef, useEffect, useState, useCallback } from "react";
 import { BrightnessSlider } from "./BrightnessSlider";
 import { QuickColors } from "./QuickColors";
+import { hexToHsv, hsvToHex, hsvToRgb } from "../../lib/color";
 
 interface ColorWheelProps {
   h: number; // HSV Hue 0-360
@@ -42,106 +43,11 @@ export const ColorWheel: React.FC<ColorWheelProps> = ({
   const outerRadius = wheelSize / 2 - 6;
   const innerRadius = outerRadius * 0.53;
 
-  // HSV to RGB conversion
-  const hsvToRgb = useCallback(
-    (h: number, s: number, v: number): [number, number, number] => {
-      h = h % 360;
-      s = Math.max(0, Math.min(100, s)) / 100;
-      v = Math.max(0, Math.min(100, v)) / 100;
-
-      if (s === 0) {
-        const gray = Math.round(v * 255);
-        return [gray, gray, gray];
-      }
-
-      const hSector = h / 60;
-      const sector = Math.floor(hSector);
-      const f = hSector - sector;
-
-      const p = v * (1 - s);
-      const q = v * (1 - s * f);
-      const t = v * (1 - s * (1 - f));
-
-      let r, g, b;
-      switch (sector) {
-        case 0:
-          r = v;
-          g = t;
-          b = p;
-          break;
-        case 1:
-          r = q;
-          g = v;
-          b = p;
-          break;
-        case 2:
-          r = p;
-          g = v;
-          b = t;
-          break;
-        case 3:
-          r = p;
-          g = q;
-          b = v;
-          break;
-        case 4:
-          r = t;
-          g = p;
-          b = v;
-          break;
-        default:
-          r = v;
-          g = p;
-          b = q;
-          break;
-      }
-
-      return [Math.round(r * 255), Math.round(g * 255), Math.round(b * 255)];
-    },
-    [],
-  );
-
   // Get current hex color
   const currentHex = useCallback(() => {
     if (isWarmWhite) return "#FFF8DC";
-    const [r, g, b] = hsvToRgb(h, s, v);
-    return `#${r.toString(16).padStart(2, "0")}${g.toString(16).padStart(2, "0")}${b.toString(16).padStart(2, "0")}`.toUpperCase();
-  }, [h, s, v, isWarmWhite, hsvToRgb]);
-
-  // Convert hex to HSV
-  const hexToHsv = useCallback((hex: string): [number, number, number] => {
-    // Remove # if present
-    hex = hex.replace("#", "");
-
-    // Parse RGB values
-    const r = parseInt(hex.slice(0, 2), 16) / 255;
-    const g = parseInt(hex.slice(2, 4), 16) / 255;
-    const b = parseInt(hex.slice(4, 6), 16) / 255;
-
-    const max = Math.max(r, g, b);
-    const min = Math.min(r, g, b);
-    const delta = max - min;
-
-    // Calculate Value
-    const value = max * 100;
-
-    // Calculate Saturation
-    const saturation = max === 0 ? 0 : (delta / max) * 100;
-
-    // Calculate Hue
-    let hue = 0;
-    if (delta !== 0) {
-      if (max === r) {
-        hue = ((g - b) / delta + (g < b ? 6 : 0)) * 60;
-      } else if (max === g) {
-        hue = ((b - r) / delta + 2) * 60;
-      } else {
-        hue = ((r - g) / delta + 4) * 60;
-      }
-    }
-
-    return [Math.round(hue), Math.round(saturation), Math.round(value)];
-  }, []);
+    return hsvToHex(h, s, v);
+  }, [h, s, v, isWarmWhite]);
 
   // Draw the static HSV color wheel once on mount
   useEffect(() => {
@@ -199,7 +105,7 @@ export const ColorWheel: React.FC<ColorWheelProps> = ({
 
     // Store the clean wheel image data for future use
     cleanWheelImageData.current = ctx.getImageData(0, 0, wheelSize, wheelSize);
-  }, [hsvToRgb]); // Only run once on mount
+  }, []); // Only run once on mount
 
   // Draw only the selection dot when h, s, or warm white mode changes
   useEffect(() => {

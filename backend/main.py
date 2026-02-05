@@ -137,7 +137,7 @@ websocket_manager = ConnectionManager()
 
 # Rate limiting with simple request debouncing
 request_cache = {}
-DEBOUNCE_MS = 100
+DEBOUNCE_MS = 200
 
 
 def should_process_request(bulb_name: str, action: str) -> bool:
@@ -291,6 +291,8 @@ async def control_bulb(bulb_name: str, command: ColorCommand):
         debug_log(f"API: Command successful for {bulb_name} - {result}")
         return result
 
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -305,57 +307,46 @@ async def control_group(command: GroupCommand):
 
     try:
         results = {}
+        targets = bulb_manager.resolve_targets(command.targets)
+        if not targets:
+            raise HTTPException(status_code=400, detail="No valid bulbs in targets")
 
         if command.action in ["on", "off"]:
             power_state = command.action == "on"
-            for target in command.targets:
-                if target in bulb_manager.bulbs:
-                    results[target] = await bulb_manager.set_power(target, power_state)
-                elif target in bulb_manager.groups:
-                    for bulb_name in bulb_manager.groups[target]:
-                        results[bulb_name] = await bulb_manager.set_power(
-                            bulb_name, power_state
-                        )
+            for target in targets:
+                results[target] = await bulb_manager.set_power(target, power_state)
 
         elif command.action == "toggle":
-            for target in command.targets:
-                if target in bulb_manager.bulbs:
-                    current_state = bulb_manager.get_bulb_state(target)
-                    if current_state:
-                        results[target] = await bulb_manager.set_power(target, not current_state.on)
-                elif target in bulb_manager.groups:
-                    for bulb_name in bulb_manager.groups[target]:
-                        current_state = bulb_manager.get_bulb_state(bulb_name)
-                        if current_state:
-                            results[bulb_name] = await bulb_manager.set_power(
-                                bulb_name, not current_state.on
-                            )
+            for target in targets:
+                current_state = bulb_manager.get_bulb_state(target)
+                if current_state:
+                    results[target] = await bulb_manager.set_power(
+                        target, not current_state.on
+                    )
 
         elif command.action == "hsv" and all(
             x is not None for x in [command.h, command.s, command.v]
         ):
-            results = await bulb_manager.set_group_hsv(command.targets, command.h, command.s, command.v)
+            results = await bulb_manager.set_group_hsv(targets, command.h, command.s, command.v)
 
         elif command.action == "color" and command.hex:
             h, s, v = hex_to_hsv(command.hex)
-            results = await bulb_manager.set_group_hsv(command.targets, h, s, v)
+            results = await bulb_manager.set_group_hsv(targets, h, s, v)
 
         elif command.action == "warm_white" and command.brightness:
-            for target in command.targets:
-                if target in bulb_manager.bulbs:
-                    results[target] = await bulb_manager.set_warm_white(
-                        target, command.brightness
-                    )
-                elif target in bulb_manager.groups:
-                    for bulb_name in bulb_manager.groups[target]:
-                        results[bulb_name] = await bulb_manager.set_warm_white(
-                            bulb_name, command.brightness
-                        )
+            for target in targets:
+                results[target] = await bulb_manager.set_warm_white(
+                    target, command.brightness
+                )
+        else:
+            raise HTTPException(status_code=400, detail="Invalid command parameters")
 
         result = {"message": "Group command executed", "results": results}
         debug_log(f"API: Group command successful - {result}")
         return result
 
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -389,6 +380,8 @@ async def force_sync():
         }
         debug_log(f"API: Sync completed - {result}")
         return result
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -447,4 +440,3 @@ if __name__ == "__main__":
         log_level="info",
         access_log=False,  # Reduce log spam
     )
-

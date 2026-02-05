@@ -5,7 +5,7 @@ Centralized state with efficient caching and updates
 
 import asyncio
 import json
-from typing import Dict, List, Optional, Callable
+from typing import Awaitable, Callable, Dict, List, Optional
 from dataclasses import dataclass
 from datetime import datetime
 
@@ -56,11 +56,15 @@ class BulbState:
 
 class BulbManager:
     """Manages bulb states and communications"""
+    MIN_COMMAND_INTERVAL_SECONDS = 0.25
+    GROUP_COMMAND_SPACING_SECONDS = 0.05
 
     def __init__(self, config_path: str = "../config.json"):
         self.bulbs: Dict[str, BulbState] = {}
         self.groups: Dict[str, List[str]] = {}
         self.controllers: Dict[str, LEDController] = {}
+        self.command_locks: Dict[str, asyncio.Lock] = {}
+        self.last_transport_command: Dict[str, float] = {}
         self.subscribers: List[Callable] = []
         self.polling_task: Optional[asyncio.Task] = None
         self.polling_enabled = False
@@ -89,6 +93,46 @@ class BulbManager:
         """Create LED controllers for each bulb"""
         for name, bulb in self.bulbs.items():
             self.controllers[name] = LEDController(bulb.ip)
+            self.command_locks[name] = asyncio.Lock()
+            self.last_transport_command[name] = 0.0
+
+    def resolve_targets(self, targets: List[str]) -> List[str]:
+        """Resolve bulbs/groups to unique bulb names while preserving order"""
+        resolved: List[str] = []
+        seen = set()
+
+        for target in targets:
+            if target in self.bulbs:
+                if target not in seen:
+                    seen.add(target)
+                    resolved.append(target)
+            elif target in self.groups:
+                for bulb_name in self.groups[target]:
+                    if bulb_name in self.bulbs and bulb_name not in seen:
+                        seen.add(bulb_name)
+                        resolved.append(bulb_name)
+
+        return resolved
+
+    async def _run_serialized_command(
+        self, name: str, command: Callable[[LEDController], Awaitable[bool]]
+    ) -> bool:
+        """Serialize and throttle bulb commands to avoid overloading devices"""
+        if name not in self.controllers:
+            return False
+
+        lock = self.command_locks[name]
+        async with lock:
+            loop = asyncio.get_running_loop()
+            now = loop.time()
+            last_command = self.last_transport_command.get(name, 0.0)
+            delay = self.MIN_COMMAND_INTERVAL_SECONDS - (now - last_command)
+            if delay > 0:
+                await asyncio.sleep(delay)
+
+            success = await command(self.controllers[name])
+            self.last_transport_command[name] = loop.time()
+            return success
 
     def subscribe(self, callback: Callable):
         """Subscribe to state changes"""
@@ -167,8 +211,10 @@ class BulbManager:
         if name not in self.controllers:
             return False
 
-        controller = self.controllers[name]
-        success = await controller.power_on() if on else await controller.power_off()
+        success = await self._run_serialized_command(
+            name,
+            lambda controller: controller.power_on() if on else controller.power_off(),
+        )
 
         if success:
             bulb = self.bulbs[name]
@@ -183,8 +229,9 @@ class BulbManager:
         if name not in self.controllers:
             return False
 
-        controller = self.controllers[name]
-        success = await controller.set_rgb(r, g, b)
+        success = await self._run_serialized_command(
+            name, lambda controller: controller.set_rgb(r, g, b)
+        )
 
         if success:
             bulb = self.bulbs[name]
@@ -209,9 +256,10 @@ class BulbManager:
         if name not in self.controllers:
             return False
 
-        controller = self.controllers[name]
         brightness_255 = int((brightness / 100) * 255)
-        success = await controller.set_warm_white(brightness_255)
+        success = await self._run_serialized_command(
+            name, lambda controller: controller.set_warm_white(brightness_255)
+        )
 
         if success:
             bulb = self.bulbs[name]
@@ -230,18 +278,15 @@ class BulbManager:
         self, group_names: List[str], r: int, g: int, b: int
     ) -> Dict[str, bool]:
         """Set RGB for multiple bulbs/groups"""
-        target_bulbs = set()
+        target_bulbs = self.resolve_targets(group_names)
+        results: Dict[str, bool] = {}
 
-        for target in group_names:
-            if target in self.bulbs:
-                target_bulbs.add(target)
-            elif target in self.groups:
-                target_bulbs.update(self.groups[target])
+        for index, bulb_name in enumerate(target_bulbs):
+            results[bulb_name] = await self.set_rgb(bulb_name, r, g, b)
+            if index < len(target_bulbs) - 1:
+                await asyncio.sleep(self.GROUP_COMMAND_SPACING_SECONDS)
 
-        tasks = [self.set_rgb(bulb_name, r, g, b) for bulb_name in target_bulbs]
-        results = await asyncio.gather(*tasks)
-
-        return dict(zip(target_bulbs, results))
+        return results
 
     async def set_group_hsv(
         self, group_names: List[str], h: float, s: float, v: float

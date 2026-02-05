@@ -37,3 +37,14 @@ Address correctness issues first, then simplify code paths without increasing ar
 - Fewer moving parts in frontend color logic.
 - Net reduction in LOC in control components.
 
+## Implementation Status (2026-02-05)
+- Completed: status-code preservation in `backend/main.py`.
+- Completed: explicit invalid-action handling and empty-target validation in `/groups/command`.
+- Completed: immutable group target comparison in `src/components/controls/BulbControls.tsx`.
+- Completed: WebSocket reconnect timeout cleanup on unmount in `src/components/controls/BulbControls.tsx`.
+- Completed: shared color conversion utilities via `src/lib/color.ts`.
+- Completed: bulb communication hardening in `backend/bulb_manager.py`:
+  - Per-bulb command serialization lock.
+  - Minimum 250ms inter-command spacing per bulb.
+  - Group target deduplication.
+  - Sequential group color dispatch with 50ms inter-bulb spacing.

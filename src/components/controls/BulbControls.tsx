@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef, useCallback } from "react";
 import { ColorWheel } from "../color/ColorWheel";
+import { hsvToHex } from "../../lib/color";
 
 interface BulbState {
   name: string;
@@ -37,71 +38,8 @@ export const BulbControls: React.FC<BulbControlsProps> = ({
   const [isWarmWhite, setIsWarmWhite] = useState(false);
   const [isConnected, setIsConnected] = useState(false);
   const wsRef = useRef<WebSocket | null>(null);
-
-  // HSV to hex conversion - memoized for performance
-  const hsvToHex = useCallback((h: number, s: number, v: number): string => {
-    const hNorm = h % 360;
-    const sNorm = Math.max(0, Math.min(100, s)) / 100;
-    const vNorm = Math.max(0, Math.min(100, v)) / 100;
-
-    if (sNorm === 0) {
-      const gray = Math.round(vNorm * 255);
-      return `#${gray.toString(16).padStart(2, "0").repeat(3)}`.toUpperCase();
-    }
-
-    const hSector = hNorm / 60;
-    const sector = Math.floor(hSector);
-    const f = hSector - sector;
-
-    const p = vNorm * (1 - sNorm);
-    const q = vNorm * (1 - sNorm * f);
-    const t = vNorm * (1 - sNorm * (1 - f));
-
-    let r, g, b;
-    switch (sector) {
-      case 0:
-        r = vNorm;
-        g = t;
-        b = p;
-        break;
-      case 1:
-        r = q;
-        g = vNorm;
-        b = p;
-        break;
-      case 2:
-        r = p;
-        g = vNorm;
-        b = t;
-        break;
-      case 3:
-        r = p;
-        g = q;
-        b = vNorm;
-        break;
-      case 4:
-        r = t;
-        g = p;
-        b = vNorm;
-        break;
-      default:
-        r = vNorm;
-        g = p;
-        b = q;
-        break;
-    }
-
-    const rHex = Math.round(r * 255)
-      .toString(16)
-      .padStart(2, "0");
-    const gHex = Math.round(g * 255)
-      .toString(16)
-      .padStart(2, "0");
-    const bHex = Math.round(b * 255)
-      .toString(16)
-      .padStart(2, "0");
-    return `#${rHex}${gHex}${bHex}`.toUpperCase();
-  }, []);
+  const reconnectTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const isUnmountingRef = useRef(false);
 
   // Helper function for consistent timestamps
   const getTimestamp = () => {
@@ -158,7 +96,9 @@ export const BulbControls: React.FC<BulbControlsProps> = ({
         console.log(
           `${getTimestamp()} | FRONTEND: WebSocket disconnected, retrying...`,
         );
-        setTimeout(connectWebSocket, 2000);
+        if (!isUnmountingRef.current) {
+          reconnectTimeoutRef.current = setTimeout(connectWebSocket, 2000);
+        }
       };
 
       ws.onerror = (error) => {
@@ -171,6 +111,10 @@ export const BulbControls: React.FC<BulbControlsProps> = ({
     connectWebSocket();
 
     return () => {
+      isUnmountingRef.current = true;
+      if (reconnectTimeoutRef.current) {
+        clearTimeout(reconnectTimeoutRef.current);
+      }
       if (wsRef.current) {
         wsRef.current.close();
       }
@@ -376,6 +320,15 @@ export const BulbControls: React.FC<BulbControlsProps> = ({
     }
   };
 
+  const areTargetsEqual = (left: string[], right: string[]) => {
+    if (left.length !== right.length) {
+      return false;
+    }
+    const leftSorted = [...left].sort();
+    const rightSorted = [...right].sort();
+    return leftSorted.every((value, index) => value === rightSorted[index]);
+  };
+
   const currentColorHex = hsvToHex(currentH, currentS, currentV);
   const connectionStatus = isConnected ? "Connected" : "Disconnected";
 
@@ -435,8 +388,7 @@ export const BulbControls: React.FC<BulbControlsProps> = ({
                   key={groupName}
                   onClick={() => selectGroup(groupName)}
                   className={`p-3 rounded-xl border transition-all duration-200 hover:scale-105 ${
-                    JSON.stringify(selectedTargets.sort()) ===
-                    JSON.stringify(groups[groupName].sort())
+                    areTargetsEqual(selectedTargets, groups[groupName])
                       ? "border-[#8ec07c] bg-[#8ec07c]/20"
                       : "border-[#504945] bg-[#3c3836]"
                   }`}
