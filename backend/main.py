@@ -138,15 +138,24 @@ websocket_manager = ConnectionManager()
 # Rate limiting with simple request debouncing
 request_cache = {}
 DEBOUNCE_MS = 120
+ACTION_DEBOUNCE_MS = {
+    "hsv": 90,
+    "color": 90,
+    "warm_white": 120,
+    "toggle": 120,
+    "on": 120,
+    "off": 120,
+}
 
 
 def should_process_request(bulb_name: str, action: str) -> bool:
     """Simple debouncing to prevent request flooding"""
     key = f"{bulb_name}:{action}"
     now = time.time() * 1000
+    debounce_ms = ACTION_DEBOUNCE_MS.get(action, DEBOUNCE_MS)
 
     if key in request_cache:
-        if now - request_cache[key] < DEBOUNCE_MS:
+        if now - request_cache[key] < debounce_ms:
             return False
 
     request_cache[key] = now

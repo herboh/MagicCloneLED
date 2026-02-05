@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useCallback } from "react";
+import React, { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import { ColorWheel } from "../color/ColorWheel";
 import { hsvToHex } from "../../lib/color";
 
@@ -137,28 +137,42 @@ export const BulbControls: React.FC<BulbControlsProps> = ({
     fetchGroups();
   }, []);
 
-  // Update current color when selection changes
+  const selectedBulbName = selectedTargets.length === 1 ? selectedTargets[0] : null;
+  const selectedBulb = useMemo(() => {
+    if (!selectedBulbName) {
+      return null;
+    }
+    return bulbs.find((b) => b.name === selectedBulbName) ?? null;
+  }, [bulbs, selectedBulbName]);
+
+  // Keep UI controls in sync with currently selected bulb only.
   useEffect(() => {
-    if (selectedTargets.length === 1) {
-      const bulb = bulbs.find((b) => b.name === selectedTargets[0]);
-      if (bulb) {
-        // Avoid stale WebSocket updates clobbering fast local interactions.
-        if (Date.now() - lastLocalInteractionRef.current < 500) {
-          return;
-        }
-        setCurrentH((prev) => (Math.abs(prev - bulb.h) > 0.1 ? bulb.h : prev));
-        setCurrentS((prev) => (Math.abs(prev - bulb.s) > 0.1 ? bulb.s : prev));
-        setCurrentV((prev) => (Math.abs(prev - bulb.v) > 0.1 ? bulb.v : prev));
-        setBrightness((prev) =>
-          Math.abs(prev - bulb.brightness) > 0.1 ? bulb.brightness : prev,
-        );
-        setIsWarmWhite((prev) => (prev !== bulb.is_warm_white ? bulb.is_warm_white : prev));
-      }
-    } else if (selectedTargets.length === 0 && bulbs.length > 0) {
-      // Auto-select first bulb
+    if (!selectedBulb) {
+      return;
+    }
+
+    // Avoid stale WebSocket updates clobbering fast local interactions.
+    if (Date.now() - lastLocalInteractionRef.current < 500) {
+      return;
+    }
+
+    setCurrentH((prev) => (Math.abs(prev - selectedBulb.h) > 0.1 ? selectedBulb.h : prev));
+    setCurrentS((prev) => (Math.abs(prev - selectedBulb.s) > 0.1 ? selectedBulb.s : prev));
+    setCurrentV((prev) => (Math.abs(prev - selectedBulb.v) > 0.1 ? selectedBulb.v : prev));
+    setBrightness((prev) =>
+      Math.abs(prev - selectedBulb.brightness) > 0.1 ? selectedBulb.brightness : prev,
+    );
+    setIsWarmWhite((prev) =>
+      prev !== selectedBulb.is_warm_white ? selectedBulb.is_warm_white : prev,
+    );
+  }, [selectedBulb]);
+
+  // Auto-select first bulb once bulb list is available.
+  useEffect(() => {
+    if (selectedTargets.length === 0 && bulbs.length > 0) {
       setSelectedTargets([bulbs[0].name]);
     }
-  }, [selectedTargets, bulbs]);
+  }, [selectedTargets.length, bulbs]);
 
   // API call helper with debug logging
   const sendCommand = async (endpoint: string, command: any) => {
@@ -206,6 +220,7 @@ export const BulbControls: React.FC<BulbControlsProps> = ({
           clearTimeout(existingTimeout);
         }
 
+        const delayMs = command.action === "hsv" ? 80 : 120;
         const timeoutId = setTimeout(() => {
           timeoutByEndpoint.delete(endpoint);
           const latestJson = lastQueuedByEndpoint.get(endpoint);
@@ -217,7 +232,7 @@ export const BulbControls: React.FC<BulbControlsProps> = ({
           }
           lastSentByEndpoint.set(endpoint, latestJson);
           sendCommand(endpoint, JSON.parse(latestJson));
-        }, 120);
+        }, delayMs);
         timeoutByEndpoint.set(endpoint, timeoutId);
       };
     })(),
