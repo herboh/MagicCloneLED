@@ -105,7 +105,7 @@ export const ColorWheel: React.FC<ColorWheelProps> = ({
 
     // Store the clean wheel image data for future use
     cleanWheelImageData.current = ctx.getImageData(0, 0, wheelSize, wheelSize);
-  }, []); // Only run once on mount
+  }, [centerX, centerY, innerRadius, outerRadius, wheelSize]);
 
   // Draw only the selection dot when h, s, or warm white mode changes
   useEffect(() => {
@@ -133,7 +133,7 @@ export const ColorWheel: React.FC<ColorWheelProps> = ({
       ctx.lineWidth = 2;
       ctx.stroke();
     }
-  }, [h, s, isWarmWhite]);
+  }, [h, s, isWarmWhite, centerX, centerY, innerRadius, outerRadius, wheelSize]);
 
   // Handle color wheel interaction
   const handleColorSelection = useCallback(
@@ -159,7 +159,7 @@ export const ColorWheel: React.FC<ColorWheelProps> = ({
 
       onColorChange(Math.round(newH), Math.round(newS), v);
     },
-    [v, onColorChange, innerRadius, outerRadius],
+    [v, onColorChange, centerX, centerY, innerRadius, outerRadius],
   );
 
   // Pointer event handlers
@@ -214,10 +214,9 @@ export const ColorWheel: React.FC<ColorWheelProps> = ({
       return;
     }
 
-    // Convert to HSV and update both color and brightness
+    // Convert to HSV and apply a single color update path
     const [newH, newS, newV] = hexToHsv(hex);
     onColorChange(newH, newS, newV);
-    onBrightnessChange(newV); // Update brightness to match the V component
     setIsEditingHex(false);
   };
 

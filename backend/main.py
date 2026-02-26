@@ -34,36 +34,37 @@ def setup_debug_logging(debug_mode: bool):
     """Setup debug logging to file with timestamping"""
     global DEBUG_MODE, debug_logger
     DEBUG_MODE = debug_mode
-    
+
     if not debug_mode:
         return
-    
+
     # Clear existing log file on startup
     log_file = "led_debug.log"
-    open(log_file, 'w').close()
-    
+    open(log_file, "w").close()
+
     # Setup logger
-    debug_logger = logging.getLogger('led_debug')
+    debug_logger = logging.getLogger("led_debug")
     debug_logger.setLevel(logging.DEBUG)
-    
+
     # File handler
     file_handler = logging.FileHandler(log_file)
     file_handler.setLevel(logging.DEBUG)
-    
-    # Console handler  
+
+    # Console handler
     console_handler = logging.StreamHandler(sys.stdout)
     console_handler.setLevel(logging.DEBUG)
-    
+
     # Formatter with timestamp
-    formatter = logging.Formatter('%(asctime)s.%(msecs)03d | %(message)s', 
-                                 datefmt='%H:%M:%S')
+    formatter = logging.Formatter(
+        "%(asctime)s.%(msecs)03d | %(message)s", datefmt="%H:%M:%S"
+    )
     file_handler.setFormatter(formatter)
     console_handler.setFormatter(formatter)
-    
+
     debug_logger.addHandler(file_handler)
     debug_logger.addHandler(console_handler)
     debug_logger.info("=== LED Controller Debug Logging Started ===")
-    
+
     # Set debug logger for led_controller module
     led_controller.set_debug_logger(debug_log)
 
@@ -106,18 +107,24 @@ class ConnectionManager:
     async def connect(self, websocket: WebSocket):
         await websocket.accept()
         self.active_connections.append(websocket)
-        debug_log(f"WEBSOCKET: New connection established (total: {len(self.active_connections)})")
+        debug_log(
+            f"WEBSOCKET: New connection established (total: {len(self.active_connections)})"
+        )
 
     def disconnect(self, websocket: WebSocket):
         try:
             self.active_connections.remove(websocket)
-            debug_log(f"WEBSOCKET: Connection disconnected (remaining: {len(self.active_connections)})")
+            debug_log(
+                f"WEBSOCKET: Connection disconnected (remaining: {len(self.active_connections)})"
+            )
         except ValueError:
             pass
 
     async def broadcast(self, message: dict):
         if len(self.active_connections) > 0:
-            debug_log(f"WEBSOCKET: Broadcasting to {len(self.active_connections)} clients: {message}")
+            debug_log(
+                f"WEBSOCKET: Broadcasting to {len(self.active_connections)} clients: {message}"
+            )
 
         dead_connections = []
         for connection in self.active_connections:
@@ -212,7 +219,7 @@ app = FastAPI(
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
-    allow_credentials=True,
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -252,7 +259,7 @@ async def get_bulb(bulb_name: str):
 async def control_bulb(bulb_name: str, command: ColorCommand):
     """Control individual bulb with HSV support"""
     debug_log(f"API: POST /bulbs/{bulb_name}/command - {command.dict()}")
-    
+
     if not bulb_manager:
         raise HTTPException(status_code=503, detail="Bulb manager not initialized")
 
@@ -281,7 +288,9 @@ async def control_bulb(bulb_name: str, command: ColorCommand):
         elif command.action == "hsv" and all(
             x is not None for x in [command.h, command.s, command.v]
         ):
-            success = await bulb_manager.set_hsv(bulb_name, command.h, command.s, command.v)
+            success = await bulb_manager.set_hsv(
+                bulb_name, command.h, command.s, command.v
+            )
 
         elif command.action == "color" and command.hex:
             h, s, v = hex_to_hsv(command.hex)
@@ -315,7 +324,7 @@ async def control_bulb(bulb_name: str, command: ColorCommand):
 async def control_group(command: GroupCommand):
     """Control multiple bulbs/groups with HSV support"""
     debug_log(f"API: POST /groups/command - {command.dict()}")
-    
+
     if not bulb_manager:
         raise HTTPException(status_code=503, detail="Bulb manager not initialized")
 
@@ -325,7 +334,9 @@ async def control_group(command: GroupCommand):
         if not targets:
             raise HTTPException(status_code=400, detail="No valid bulbs in targets")
         active_targets = [
-            target for target in targets if should_process_request(target, command.action)
+            target
+            for target in targets
+            if should_process_request(target, command.action)
         ]
         if not active_targets:
             return {"message": "Request debounced", "targets": targets}
@@ -388,7 +399,7 @@ async def get_groups():
 async def force_sync():
     """Force refresh all bulb states from physical devices"""
     debug_log("API: POST /bulbs/sync - Force refresh requested")
-    
+
     if not bulb_manager:
         raise HTTPException(status_code=503, detail="Bulb manager not initialized")
 
@@ -417,7 +428,9 @@ async def websocket_endpoint(websocket: WebSocket):
         if bulb_manager:
             initial_state = bulb_manager.get_all_states()
             initial_msg = {"type": "initial_state", "data": initial_state}
-            debug_log(f"WEBSOCKET: Sending initial state to new client: {len(initial_state)} bulbs")
+            debug_log(
+                f"WEBSOCKET: Sending initial state to new client: {len(initial_state)} bulbs"
+            )
             await websocket.send_json(initial_msg)
 
         # Keep connection alive
@@ -442,17 +455,21 @@ async def websocket_endpoint(websocket: WebSocket):
 
 if __name__ == "__main__":
     # Parse command line arguments
-    parser = argparse.ArgumentParser(description='LED Controller FastAPI Server')
-    parser.add_argument('--debug', '--verbose', action='store_true', 
-                       help='Enable debug logging to file and console')
+    parser = argparse.ArgumentParser(description="LED Controller FastAPI Server")
+    parser.add_argument(
+        "--debug",
+        "--verbose",
+        action="store_true",
+        help="Enable debug logging to file and console",
+    )
     args = parser.parse_args()
-    
+
     # Setup debug logging
     setup_debug_logging(args.debug)
-    
+
     if args.debug:
         print("Debug logging enabled - writing to led_debug.log and console")
-    
+
     uvicorn.run(
         "main:app",
         host="0.0.0.0",

@@ -24,7 +24,8 @@ RUN apk add --no-cache nginx
 WORKDIR /app
 
 # Install Python dependencies
-RUN pip install --no-cache-dir fastapi uvicorn[standard] websockets
+COPY backend/requirements.txt ./backend/requirements.txt
+RUN pip install --no-cache-dir -r /app/backend/requirements.txt
 
 # Copy Python backend and startup script
 COPY backend/ ./backend/

@@ -1,6 +1,5 @@
 import React, { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import { ColorWheel } from "../color/ColorWheel";
-import { hsvToHex } from "../../lib/color";
 
 interface BulbState {
   name: string;
@@ -175,7 +174,7 @@ export const BulbControls: React.FC<BulbControlsProps> = ({
   }, [selectedTargets.length, bulbs]);
 
   // API call helper with debug logging
-  const sendCommand = async (endpoint: string, command: any) => {
+  const sendCommand = useCallback(async (endpoint: string, command: Record<string, unknown>) => {
     const timestamp = getTimestamp();
     console.log(
       `${timestamp} | FRONTEND: POST ${endpoint} - ${JSON.stringify(command)}`,
@@ -202,42 +201,39 @@ export const BulbControls: React.FC<BulbControlsProps> = ({
     } catch (error) {
       console.log(`${timestamp} | FRONTEND: API error - ${error}`);
     }
-  };
+  }, []);
 
   // Debounced API call helper
-  const debouncedSendCommand = useCallback(
-    (() => {
-      const timeoutByEndpoint = new Map<string, ReturnType<typeof setTimeout>>();
-      const lastQueuedByEndpoint = new Map<string, string>();
-      const lastSentByEndpoint = new Map<string, string>();
+  const debouncedSendCommand = useMemo(() => {
+    const timeoutByEndpoint = new Map<string, ReturnType<typeof setTimeout>>();
+    const lastQueuedByEndpoint = new Map<string, string>();
+    const lastSentByEndpoint = new Map<string, string>();
 
-      return (endpoint: string, command: any) => {
-        const commandJson = JSON.stringify(command);
-        lastQueuedByEndpoint.set(endpoint, commandJson);
+    return (endpoint: string, command: Record<string, unknown>) => {
+      const commandJson = JSON.stringify(command);
+      lastQueuedByEndpoint.set(endpoint, commandJson);
 
-        const existingTimeout = timeoutByEndpoint.get(endpoint);
-        if (existingTimeout) {
-          clearTimeout(existingTimeout);
+      const existingTimeout = timeoutByEndpoint.get(endpoint);
+      if (existingTimeout) {
+        clearTimeout(existingTimeout);
+      }
+
+      const delayMs = command.action === "hsv" ? 100 : 120;
+      const timeoutId = setTimeout(() => {
+        timeoutByEndpoint.delete(endpoint);
+        const latestJson = lastQueuedByEndpoint.get(endpoint);
+        if (!latestJson) {
+          return;
         }
-
-        const delayMs = command.action === "hsv" ? 80 : 120;
-        const timeoutId = setTimeout(() => {
-          timeoutByEndpoint.delete(endpoint);
-          const latestJson = lastQueuedByEndpoint.get(endpoint);
-          if (!latestJson) {
-            return;
-          }
-          if (lastSentByEndpoint.get(endpoint) === latestJson) {
-            return;
-          }
-          lastSentByEndpoint.set(endpoint, latestJson);
-          sendCommand(endpoint, JSON.parse(latestJson));
-        }, delayMs);
-        timeoutByEndpoint.set(endpoint, timeoutId);
-      };
-    })(),
-    [],
-  );
+        if (lastSentByEndpoint.get(endpoint) === latestJson) {
+          return;
+        }
+        lastSentByEndpoint.set(endpoint, latestJson);
+        sendCommand(endpoint, JSON.parse(latestJson) as Record<string, unknown>);
+      }, delayMs);
+      timeoutByEndpoint.set(endpoint, timeoutId);
+    };
+  }, [sendCommand]);
 
   // Color change handler
   const handleColorChange = (h: number, s: number, v: number) => {
@@ -387,7 +383,6 @@ export const BulbControls: React.FC<BulbControlsProps> = ({
     return leftSorted.every((value, index) => value === rightSorted[index]);
   };
 
-  const currentColorHex = hsvToHex(currentH, currentS, currentV);
   const connectionStatus = isConnected ? "Connected" : "Disconnected";
 
   return (

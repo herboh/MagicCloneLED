@@ -5,12 +5,12 @@ Centralized state with efficient caching and updates
 
 import asyncio
 import json
-from typing import Awaitable, Callable, Dict, List, Optional
 from dataclasses import dataclass
 from datetime import datetime
+from typing import Awaitable, Callable, Dict, List, Optional
 
+from color_utils import hsv_to_rgb, rgb_to_hex, rgb_to_hsv
 from led_controller import LEDController
-from color_utils import rgb_to_hsv, hsv_to_rgb, rgb_to_hex
 
 
 @dataclass
@@ -56,6 +56,7 @@ class BulbState:
 
 class BulbManager:
     """Manages bulb states and communications"""
+
     MIN_COMMAND_INTERVAL_SECONDS = 0.10
     GROUP_COMMAND_SPACING_SECONDS = 0.015
 
@@ -85,7 +86,9 @@ class BulbManager:
             self.groups = config.get("groups", {})
 
         except FileNotFoundError:
-            print(f"ERROR: Config file {config_path} not found - bulb manager will have no bulbs")
+            print(
+                f"ERROR: Config file {config_path} not found - bulb manager will have no bulbs"
+            )
         except json.JSONDecodeError as e:
             print(f"ERROR: Invalid JSON in config file {config_path}: {e}")
 
@@ -166,7 +169,7 @@ class BulbManager:
             return False
 
         bulb = self.bulbs[name]
-        
+
         # Check if a command was sent in the last ~5 seconds, if so ignore poll
         if bulb.last_command_time:
             time_since_command = datetime.now() - bulb.last_command_time
